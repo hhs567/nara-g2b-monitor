@@ -1,0 +1,48 @@
+name: Nara G2B Monitor
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Nara monitor
+        env:
+          G2B_ORDERPLAN_KEY: ${{ secrets.G2B_ORDERPLAN_KEY }}
+          G2B_PRESPEC_KEY: ${{ secrets.G2B_PRESPEC_KEY }}
+          G2B_BID_KEY: ${{ secrets.G2B_BID_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          LOOKBACK_MINUTES: "30"
+          NUM_OF_ROWS: "1000"
+        run: python nara_monitor.py
+
+      - name: Save notification state
+        run: |
+          if [ -f seen_ids.json ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add seen_ids.json
+            git diff --cached --quiet || git commit -m "chore: update nara monitor state"
+            git push
+          fi
