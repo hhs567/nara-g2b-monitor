@@ -117,24 +117,13 @@ Telegram 전송 완료...
 
 이후 workflow가 10분마다 자동 실행됩니다.
 
-## 5. 중복 알림 방지
+## 5. 현재 버전의 중복 방지
 
-`seen_ids.json`을 GitHub repository에 저장하고 GitHub Actions가 변경사항을 자동 commit/push합니다.
+이 버전은 한 번 실행하는 동안 같은 공고가 3개 API에서 중복으로 잡히는 것을 막습니다.
 
-기본적으로 최근 30일의 알림 이력을 기억하므로, 같은 공고가 다음 실행의 30분 재조회 구간에 다시 걸려도 Telegram으로 반복 알림하지 않습니다.
+다만 GitHub Actions 실행 사이에 이미 알린 공고를 영구적으로 기억하는 저장소는 아직 넣지 않았습니다.
 
-```text
-API 조회 → 키워드 매칭 → seen_ids.json 확인
-                         ↓
-                   이미 알림함? → 예 → 건너뜀
-                         ↓ 아니오
-                    Telegram 전송
-                         ↓
-                    상태 저장/commit
-```
-
-`STATE_MAX_AGE_DAYS`로 기억 기간을 변경할 수 있습니다.
-
+따라서 **완전한 중복 알림 방지**가 필요하면 다음 단계에서 GitHub artifact/cache 또는 별도 파일 저장 방식을 추가할 수 있습니다.
 
 ## 6. 조회 누락 방지
 
