@@ -1,119 +1,400 @@
-import os, json, time, hashlib
+import os
+import json
+import time
+import hashlib
 from pathlib import Path
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from urllib.parse import unquote
+
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
-KEYWORDS = ['계획','설계','정비','구상','타당성','지정','재생','조성','시행','개발','검토','후보지','전략','조사','사업화']
-SEOUL = ZoneInfo('Asia/Seoul')
-STATE_FILE = os.getenv('STATE_FILE','seen_ids.json')
-LOOKBACK_MINUTES = int(os.getenv('LOOKBACK_MINUTES','30'))
-NUM_OF_ROWS = int(os.getenv('NUM_OF_ROWS','1000'))
-
-APIS = [
- ('발주계획','https://apis.data.go.kr/1230000/ao/OrderPlanSttusService','getOrderPlanSttusListServc','G2B_ORDERPLAN_KEY'),
- ('사전규격','https://apis.data.go.kr/1230000/ao/HrcspSsstndrdInfoService','getPublicPrcureThngInfoServc','G2B_PRESPEC_KEY'),
- ('입찰공고','https://apis.data.go.kr/1230000/ad/BidPublicInfoService','getBidPblancListInfoServc','G2B_BID_KEY'),
+KEYWORDS = [
+    "계획", "설계", "정비", "구상", "타당성", "지정", "재생", "조성",
+    "시행", "개발", "검토", "후보지", "전략", "조사", "사업화"
 ]
 
-def now(): return datetime.now(SEOUL)
+SEOUL = ZoneInfo("Asia/Seoul")
+
+API_SPECS = [
+    {
+        "label": "발주계획",
+        "base": "https://apis.data.go.kr/1230000/ao/OrderPlanSttusService",
+        "op": "getOrderPlanSttusListServc",
+        "key_env": "G2B_ORDERPLAN_KEY",
+    },
+    {
+        "label": "사전규격",
+        "base": "https://apis.data.go.kr/1230000/ao/HrcspSsstndrdInfoService",
+        "op": "getPublicPrcureThngInfoServc",
+        "key_env": "G2B_PRESPEC_KEY",
+    },
+    {
+        "label": "입찰공고",
+        "base": "https://apis.data.go.kr/1230000/ad/BidPublicInfoService",
+        "op": "getBidPblancListInfoServc",
+        "key_env": "G2B_BID_KEY",
+    },
+]
+
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+
+LOOKBACK_MINUTES = int(os.environ.get("LOOKBACK_MINUTES", "30"))
+NUM_OF_ROWS = int(os.environ.get("NUM_OF_ROWS", "1000"))
+STATE_FILE = os.environ.get("STATE_FILE", "seen_ids.json")
+STATE_MAX_AGE_DAYS = int(os.environ.get("STATE_MAX_AGE_DAYS", "30"))
+
+CONNECT_TIMEOUT = int(os.environ.get("CONNECT_TIMEOUT", "120"))
+READ_TIMEOUT = int(os.environ.get("READ_TIMEOUT", "120"))
+API_RETRIES = int(os.environ.get("API_RETRIES", "3"))
+RETRY_BACKOFF = int(os.environ.get("RETRY_BACKOFF", "10"))
+
+
+def now_seoul():
+    return datetime.now(SEOUL)
+
+
+def build_session():
+    retry = Retry(
+        total=API_RETRIES,
+        connect=API_RETRIES,
+        read=API_RETRIES,
+        status=API_RETRIES,
+        backoff_factor=RETRY_BACKOFF,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=frozenset(["GET", "POST"]),
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session = requests.Session()
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
+SESSION = build_session()
+
 
 def load_state():
-    p=Path(STATE_FILE)
-    if not p.exists(): return {}
-    try: return json.loads(p.read_text(encoding='utf-8'))
-    except: return {}
+    path = Path(STATE_FILE)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
 
-def save_state(s): Path(STATE_FILE).write_text(json.dumps(s,ensure_ascii=False,indent=2),encoding='utf-8')
 
-def extract_items(obj):
-    out=[]
+def save_state(state):
+    Path(STATE_FILE).write_text(
+        json.dumps(state, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def cleanup_state(state):
+    cutoff = now_seoul() - timedelta(days=STATE_MAX_AGE_DAYS)
+    cleaned = {}
+    for key, ts in state.items():
+        try:
+            dt = datetime.fromisoformat(ts)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=SEOUL)
+            if dt >= cutoff:
+                cleaned[key] = ts
+        except Exception:
+            pass
+    return cleaned
+
+
+def flatten(obj, prefix=""):
+    parts = []
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            parts.extend(flatten(v, f"{prefix}.{k}" if prefix else str(k)))
+    elif isinstance(obj, list):
+        for i, v in enumerate(obj):
+            parts.extend(flatten(v, f"{prefix}[{i}]"))
+    else:
+        parts.append((prefix, "" if obj is None else str(obj)))
+    return parts
+
+
+def record_text(record):
+    return " ".join(v for _, v in flatten(record)).lower()
+
+
+def matched_keywords(record):
+    text = record_text(record)
+    return [kw for kw in KEYWORDS if kw.lower() in text]
+
+
+def get_first(record, candidates):
+    if not isinstance(record, dict):
+        return ""
+    for key in candidates:
+        val = record.get(key)
+        if val not in (None, ""):
+            return str(val).strip()
+    return ""
+
+
+def make_unique_key(label, record):
+    preferred = [
+        "orderPlanUntyNo", "bfSpecRgstNo", "bidNtceNo", "bidNtceOrd",
+        "orderPlanNo", "rgstNo", "ntceNo"
+    ]
+    values = [label]
+    for k in preferred:
+        if isinstance(record, dict) and record.get(k) not in (None, ""):
+            values.append(f"{k}:{record.get(k)}")
+    if len(values) > 1:
+        return "|".join(values)
+
+    raw = json.dumps(record, ensure_ascii=False, sort_keys=True, default=str)
+    return f"{label}|sha256:{hashlib.sha256(raw.encode('utf-8')).hexdigest()}"
+
+
+def extract_records(obj):
+    found = []
+
     def walk(x):
-        if isinstance(x,dict):
-            if 'item' in x:
-                v=x['item']
-                if isinstance(v,list): out.extend(i for i in v if isinstance(i,dict))
-                elif isinstance(v,dict): out.append(v)
+        if isinstance(x, dict):
+            if "item" in x:
+                item = x["item"]
+                if isinstance(item, list):
+                    found.extend([v for v in item if isinstance(v, dict)])
+                elif isinstance(item, dict):
+                    found.append(item)
+
+            if "items" in x:
+                items = x["items"]
+                if isinstance(items, list):
+                    found.extend([v for v in items if isinstance(v, dict)])
+                elif isinstance(items, dict) and "item" in items:
+                    item = items["item"]
+                    if isinstance(item, list):
+                        found.extend([v for v in item if isinstance(v, dict)])
+                    elif isinstance(item, dict):
+                        found.append(item)
+
             for v in x.values():
-                if isinstance(v,(dict,list)): walk(v)
-        elif isinstance(x,list):
-            for v in x: walk(v)
+                if isinstance(v, (dict, list)):
+                    walk(v)
+
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+
     walk(obj)
-    uniq=[]; seen=set()
-    for r in out:
-        sig=json.dumps(r,ensure_ascii=False,sort_keys=True,default=str)
-        if sig not in seen: seen.add(sig); uniq.append(r)
+
+    uniq = []
+    seen = set()
+    for rec in found:
+        sig = json.dumps(rec, ensure_ascii=False, sort_keys=True, default=str)
+        if sig not in seen:
+            seen.add(sig)
+            uniq.append(rec)
     return uniq
 
-def text_of(r):
-    vals=[]
-    def walk(x):
-        if isinstance(x,dict):
-            for v in x.values(): walk(v)
-        elif isinstance(x,list):
-            for v in x: walk(v)
-        elif x is not None: vals.append(str(x))
-    walk(r)
-    return ' '.join(vals)
 
-def first(r, keys):
-    for k in keys:
-        v=r.get(k) if isinstance(r,dict) else None
-        if v not in (None,''): return str(v).strip()
-    return ''
+def api_time_window():
+    end = now_seoul()
+    start = end - timedelta(minutes=LOOKBACK_MINUTES)
+    return start, end
 
-def uid(label,r):
-    keys=['orderPlanUntyNo','bfSpecRgstNo','bidNtceNo','bidNtceOrd']
-    vals=[str(r.get(k,'')) for k in keys if r.get(k) not in (None,'')]
-    if vals: return label+'|'+'|'.join(vals)
-    raw=json.dumps(r,ensure_ascii=False,sort_keys=True,default=str)
-    return label+'|'+hashlib.sha256(raw.encode()).hexdigest()
 
-def fetch(label,base,op,keyenv):
-    key=os.getenv(keyenv,'').strip()
-    if not key: raise RuntimeError(f'{keyenv} Secret이 없습니다.')
-    end=now(); start=end-timedelta(minutes=LOOKBACK_MINUTES)
-    params={'serviceKey':unquote(key),'pageNo':1,'numOfRows':NUM_OF_ROWS,'type':'json','inqryDiv':'1','inqryBgnDt':start.strftime('%Y%m%d%H%M'),'inqryEndDt':end.strftime('%Y%m%d%H%M')}
-    if label=='발주계획':
-        params['orderBgnYm']=start.strftime('%Y%m'); params['orderEndYm']=end.strftime('%Y%m')
-    res=requests.get(base.rstrip('/')+'/'+op,params=params,timeout=40)
-    res.raise_for_status()
-    return extract_items(res.json())
+def request_api(spec):
+    service_key = os.environ.get(spec["key_env"], "").strip()
+    if not service_key:
+        raise RuntimeError(f"{spec['key_env']} Secret이 없습니다.")
 
-def message(label,r,kws):
-    title=first(r,['bidNtceNm','bfSpecNm','orderPlanNm','prdctNm','bsnsNm','cntrctNm']) or '(제목 확인 필요)'
-    inst=first(r,['ntceInsttNm','orderInsttNm','dmndInsttNm','rlDminsttNm','insttNm']) or '-'
-    dt=first(r,['bidNtceDt','rgstDt','orderPlanDt','bfSpecRgstDt','ntceDt'])
-    url=first(r,['bidNtceDtlUrl','bfSpecDtlUrl','orderPlanUrl','ntceDtlUrl'])
-    lines=[f'🔔 [나라장터 {label}]',title,'',f'🏢 발주기관: {inst}',f'🔎 검색어: {", ".join(kws)}']
-    if dt: lines.append(f'🕒 등록/공고일: {dt}')
-    if url: lines += ['',f'🔗 {url}']
-    return '\n'.join(lines)
+    service_key = unquote(service_key)
 
-def send_telegram(txt):
-    token=os.getenv('TELEGRAM_BOT_TOKEN','').strip(); chat=os.getenv('TELEGRAM_CHAT_ID','').strip()
-    if not token or not chat: raise RuntimeError('Telegram Secret이 없습니다.')
-    u=f'https://api.telegram.org/bot{token}/sendMessage'
-    r=requests.post(u,json={'chat_id':chat,'text':txt,'disable_web_page_preview':True},timeout=30)
-    r.raise_for_status()
+    start, end = api_time_window()
+    params = {
+        "serviceKey": service_key,
+        "pageNo": 1,
+        "numOfRows": NUM_OF_ROWS,
+        "type": "json",
+        "inqryDiv": "1",
+        "inqryBgnDt": start.strftime("%Y%m%d%H%M"),
+        "inqryEndDt": end.strftime("%Y%m%d%H%M"),
+    }
+
+    if spec["label"] == "발주계획":
+        params["orderBgnYm"] = start.strftime("%Y%m")
+        params["orderEndYm"] = end.strftime("%Y%m")
+
+    url = f"{spec['base'].rstrip('/')}/{spec['op']}"
+
+    print(
+        f"[{spec['label']}] 접속 시작 "
+        f"(connect={CONNECT_TIMEOUT}s, read={READ_TIMEOUT}s, retries={API_RETRIES})"
+    )
+
+    resp = SESSION.get(
+        url,
+        params=params,
+        timeout=(CONNECT_TIMEOUT, READ_TIMEOUT),
+    )
+
+    print(f"[{spec['label']}] HTTP {resp.status_code}")
+
+    if not resp.ok:
+        raise RuntimeError(
+            f"{spec['label']} API HTTP 오류 {resp.status_code}: "
+            f"{resp.text[:300]}"
+        )
+
+    try:
+        data = resp.json()
+    except Exception:
+        raise RuntimeError(
+            f"{spec['label']} API가 JSON을 반환하지 않았습니다. "
+            f"응답 앞부분: {resp.text[:300]}"
+        )
+
+    return extract_records(data)
+
+
+def format_amount(value):
+    if not value:
+        return ""
+    s = str(value).replace(",", "").strip()
+    try:
+        n = float(s)
+        return f"{n:,.0f}원"
+    except Exception:
+        return str(value)
+
+
+def format_message(label, record, kws):
+    title = get_first(record, [
+        "bidNtceNm", "bfSpecNm", "orderPlanNm", "prdctNm",
+        "bsnsNm", "cntrctNm", "ntceNm", "title"
+    ]) or "(제목 확인 필요)"
+
+    inst = get_first(record, [
+        "ntceInsttNm", "orderInsttNm", "dmndInsttNm",
+        "rlDminsttNm", "insttNm", "dminsttNm"
+    ])
+
+    amount = get_first(record, [
+        "asignBdgtAmt", "presmptPrce", "bsnsSumAmt",
+        "orderAmt", "bdgtAmt"
+    ])
+
+    date_val = get_first(record, [
+        "bidNtceDt", "rgstDt", "orderPlanDt", "bfSpecRgstDt",
+        "ntceDt", "writngDt", "orderPlanRegDt"
+    ])
+
+    url = get_first(record, [
+        "bidNtceDtlUrl", "bfSpecDtlUrl", "orderPlanUrl",
+        "ntceDtlUrl", "url"
+    ])
+
+    lines = [
+        f"🔔 [나라장터 {label}]",
+        title,
+        "",
+        f"🏢 발주기관: {inst or '-'}",
+        f"🔎 검색어: {', '.join(kws)}",
+    ]
+
+    if amount:
+        lines.append(f"💰 금액: {format_amount(amount)}")
+    if date_val:
+        lines.append(f"🕒 등록/공고일: {date_val}")
+    if url:
+        lines.extend(["", f"🔗 {url}"])
+
+    return "\n".join(lines)
+
+
+def send_telegram(text):
+    if not TELEGRAM_BOT_TOKEN:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN Secret이 없습니다.")
+    if not TELEGRAM_CHAT_ID:
+        raise RuntimeError("TELEGRAM_CHAT_ID Secret이 없습니다.")
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": text,
+        "disable_web_page_preview": True,
+    }
+
+    resp = SESSION.post(
+        url,
+        json=payload,
+        timeout=(30, 60),
+    )
+
+    if not resp.ok:
+        raise RuntimeError(
+            f"Telegram 전송 실패: HTTP {resp.status_code}, {resp.text[:300]}"
+        )
+
 
 def main():
-    state=load_state(); new=0; errors=[]
-    for spec in APIS:
-        label=spec[0]
-        try:
-            records=fetch(*spec); print(f'[{label}] {len(records)}건 조회')
-            for r in records:
-                t=text_of(r); kws=[k for k in KEYWORDS if k in t]
-                if not kws: continue
-                k=uid(label,r)
-                if k in state: continue
-                send_telegram(message(label,r,kws))
-                state[k]=now().isoformat(); save_state(state); new+=1; time.sleep(.4)
-        except Exception as e:
-            print(f'[오류] {label}: {e}'); errors.append(str(e))
-    save_state(state); print(f'[완료] 신규 알림 {new}건')
-    if errors: raise SystemExit(1)
+    state = cleanup_state(load_state())
+    new_count = 0
+    errors = []
 
-if __name__=='__main__': main()
+    print(f"[시작] {now_seoul().isoformat()}")
+    print(f"[조회범위] 최근 {LOOKBACK_MINUTES}분")
+    print(f"[키워드] {', '.join(KEYWORDS)}")
+
+    for spec in API_SPECS:
+        label = spec["label"]
+
+        try:
+            records = request_api(spec)
+            print(f"[{label}] 수신 레코드: {len(records)}")
+
+            for record in records:
+                kws = matched_keywords(record)
+                if not kws:
+                    continue
+
+                uid = make_unique_key(label, record)
+                if uid in state:
+                    continue
+
+                message = format_message(label, record, kws)
+                send_telegram(message)
+
+                state[uid] = now_seoul().isoformat()
+                save_state(state)
+                new_count += 1
+                print(f"[{label}] 새 알림 전송 완료")
+                time.sleep(0.5)
+
+        except Exception as e:
+            errors.append(f"{label}: {e}")
+            print(f"[오류] {label}: {e}")
+
+    state = cleanup_state(state)
+    save_state(state)
+
+    print(f"[완료] 신규 알림 {new_count}건")
+
+    if errors:
+        print("[경고] 일부 API 조회가 실패했습니다.")
+        for err in errors:
+            print(" -", err)
+
+        # 핵심 변경점:
+        # 일부 API가 일시적으로 실패해도 전체 Workflow를 실패 처리하지 않음.
+        # 다음 예약 실행에서 다시 시도합니다.
+        print("[종료] 다음 실행에서 실패한 API를 다시 시도합니다.")
+
+
+if __name__ == "__main__":
+    main()
