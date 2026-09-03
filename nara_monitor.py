@@ -16,6 +16,39 @@ KEYWORDS = [
     "시행", "개발", "검토", "후보지", "전략", "조사", "사업화"
 ]
 
+
+# 2차 필터: 도시계획/도시개발 업무 연관성
+A_GRADE_KEYWORDS = [
+    "도시기본계획", "도시관리계획", "지구단위계획", "도시개발",
+    "도시재생", "도시정비", "정비사업", "재개발", "재건축",
+    "공공주택", "주택지구", "택지개발", "신도시", "역세권",
+    "산업단지", "산업입지", "경제자유구역", "개발제한구역",
+    "노후계획도시", "도시계획시설", "토지이용계획"
+]
+
+B_GRADE_KEYWORDS = [
+    "도시", "지역계획", "광역계획", "공간계획", "생활권", "공간구조",
+    "복합개발", "개발사업", "원도심", "활성화계획", "특구",
+    "기업도시", "투자선도지구", "기회발전특구", "평화경제특구",
+    "용도지역", "용도지구", "기반시설", "공원", "녹지",
+    "철도", "광역교통", "교통계획", "도로", "지하화", "환승센터",
+    "개발수요", "개발규모", "사업타당성", "기본구상", "마스터플랜",
+    "입지분석", "입지선정", "후보지", "스마트도시", "스마트시티",
+    "탄소중립", "기후변화", "수변", "워터프론트", "친환경"
+]
+
+EXCLUDE_KEYWORDS = [
+    "제품개발", "소프트웨어 개발", "홈페이지", "웹사이트",
+    "서버", "유지보수", "장비", "물품", "인증제품", "식품",
+    "의료", "임상", "교육", "행사", "홍보", "마케팅"
+]
+
+# 제외 키워드가 있어도 아래 핵심 키워드가 있으면 살려둠
+CORE_OVERRIDE_KEYWORDS = A_GRADE_KEYWORDS + [
+    "도시", "역세권", "산업단지", "공공주택", "도시재생",
+    "도시개발", "지구단위계획", "도시기본계획", "도시관리계획"
+]
+
 SEOUL = ZoneInfo("Asia/Seoul")
 
 API_SPECS = [
@@ -131,6 +164,31 @@ def record_text(record):
 def matched_keywords(record):
     text = record_text(record)
     return [kw for kw in KEYWORDS if kw.lower() in text]
+
+
+def classify_record(record):
+    """
+    A급: 핵심 도시계획/도시개발 용역
+    B급: 연관 용역
+    제외: 2차 분야 키워드가 없거나, 제외 키워드만 강하게 포함된 경우
+    """
+    text = record_text(record)
+
+    a_hits = [kw for kw in A_GRADE_KEYWORDS if kw.lower() in text]
+    b_hits = [kw for kw in B_GRADE_KEYWORDS if kw.lower() in text]
+    ex_hits = [kw for kw in EXCLUDE_KEYWORDS if kw.lower() in text]
+    override_hits = [kw for kw in CORE_OVERRIDE_KEYWORDS if kw.lower() in text]
+
+    if a_hits:
+        return "A", a_hits, ex_hits
+
+    if b_hits:
+        # 제외 키워드가 있어도 도시계획 핵심 키워드가 있으면 통과
+        if ex_hits and not override_hits:
+            return "EXCLUDE", b_hits, ex_hits
+        return "B", b_hits, ex_hits
+
+    return "EXCLUDE", [], ex_hits
 
 
 def get_first(record, candidates):
@@ -371,7 +429,7 @@ def format_amount(value):
         return str(value)
 
 
-def format_message(label, record, kws):
+def format_message(label, record, kws, grade, field_hits):
     title = auto_find_title(record) or "(제목 확인 필요)"
 
     inst = get_first(record, [
@@ -394,12 +452,14 @@ def format_message(label, record, kws):
         "ntceDtlUrl", "url"
     ])
 
+    grade_icon = "🔴" if grade == "A" else "🟡"
     lines = [
-        f"🔔 [나라장터 {label}]",
+        f"{grade_icon} [{grade}급/나라장터 {label}]",
         title,
         "",
         f"🏢 발주기관: {inst or '-'}",
-        f"🔎 검색어: {', '.join(kws)}",
+        f"🔎 1차 검색어: {', '.join(kws)}",
+        f"🏙 2차 분야: {', '.join(field_hits[:6]) if field_hits else '-'}",
     ]
 
     if amount:
@@ -454,21 +514,34 @@ def main():
             print(f"[{label}] 수신 레코드: {len(records)}")
 
             for record in records:
+                # 1차 필터
                 kws = matched_keywords(record)
                 if not kws:
+                    continue
+
+                # 2차 필터 + A/B 등급
+                grade, field_hits, exclude_hits = classify_record(record)
+                if grade == "EXCLUDE":
+                    print(
+                        f"[{label}] 2차 필터 제외 "
+                        f"(1차={','.join(kws)}, 제외={','.join(exclude_hits) or '-'})"
+                    )
                     continue
 
                 uid = make_unique_key(label, record)
                 if uid in state:
                     continue
 
-                message = format_message(label, record, kws)
+                message = format_message(label, record, kws, grade, field_hits)
                 send_telegram(message)
 
                 state[uid] = now_seoul().isoformat()
                 save_state(state)
                 new_count += 1
-                print(f"[{label}] 새 알림 전송 완료")
+                print(
+                    f"[{label}] {grade}급 새 알림 전송 완료 "
+                    f"(분야={','.join(field_hits[:6])})"
+                )
                 time.sleep(0.5)
 
         except Exception as e:
