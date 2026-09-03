@@ -47,10 +47,10 @@ NUM_OF_ROWS = int(os.environ.get("NUM_OF_ROWS", "1000"))
 STATE_FILE = os.environ.get("STATE_FILE", "seen_ids.json")
 STATE_MAX_AGE_DAYS = int(os.environ.get("STATE_MAX_AGE_DAYS", "30"))
 
-CONNECT_TIMEOUT = int(os.environ.get("CONNECT_TIMEOUT", "120"))
-READ_TIMEOUT = int(os.environ.get("READ_TIMEOUT", "120"))
-API_RETRIES = int(os.environ.get("API_RETRIES", "3"))
-RETRY_BACKOFF = int(os.environ.get("RETRY_BACKOFF", "10"))
+CONNECT_TIMEOUT = int(os.environ.get("CONNECT_TIMEOUT", "30"))
+READ_TIMEOUT = int(os.environ.get("READ_TIMEOUT", "60"))
+API_RETRIES = int(os.environ.get("API_RETRIES", "2"))
+RETRY_BACKOFF = int(os.environ.get("RETRY_BACKOFF", "3"))
 
 
 def now_seoul():
