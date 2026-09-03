@@ -143,6 +143,78 @@ def get_first(record, candidates):
     return ""
 
 
+def auto_find_title(record):
+    """
+    예상한 제목 필드명이 없을 때 제목성 문자열을 자동 탐색합니다.
+    """
+    if not isinstance(record, dict):
+        return ""
+
+    explicit = [
+        "bidNtceNm", "bfSpecNm", "orderPlanNm", "prdctNm",
+        "bsnsNm", "cntrctNm", "ntceNm", "title",
+        "orderPlanUntyNm", "prdctClsfcNoNm", "prdctClsfcNm",
+        "prdctDtlNm", "publicPrcureThngNm", "bfSpecRgstNm",
+        "srvceNm", "serviceNm", "taskNm", "projectNm",
+        "bidNm", "noticeNm", "itemNm", "goodsNm"
+    ]
+    value = get_first(record, explicit)
+    if value:
+        return value
+
+    preferred_tokens = [
+        "title", "subject", "name", "nm", "ntce", "notice",
+        "bsns", "project", "task", "srvce", "service",
+        "prdct", "item", "goods", "cntrct"
+    ]
+    exclude_tokens = [
+        "instt", "agency", "org", "dept", "user", "charger",
+        "tel", "fax", "email", "addr", "date", "dt",
+        "code", "cd", "id", "url", "amount", "amt",
+        "price", "prce", "budget", "bdgt"
+    ]
+
+    candidates = []
+    for key, value in record.items():
+        if value in (None, ""):
+            continue
+        if not isinstance(value, (str, int, float)):
+            continue
+
+        s = str(value).strip()
+        if len(s) < 4:
+            continue
+
+        k = str(key).lower()
+        if any(tok in k for tok in exclude_tokens):
+            continue
+
+        score = 0
+        for tok in preferred_tokens:
+            if tok in k:
+                score += 10
+
+        if any("가" <= ch <= "힣" for ch in s):
+            score += 3
+
+        score += min(len(s), 60) / 20
+
+        if score > 0:
+            candidates.append((score, s))
+
+    if candidates:
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        return candidates[0][1]
+
+    for value in record.values():
+        if isinstance(value, str):
+            s = value.strip()
+            if len(s) >= 8 and "http" not in s.lower():
+                return s
+
+    return ""
+
+
 def make_unique_key(label, record):
     preferred = [
         "orderPlanUntyNo", "bfSpecRgstNo", "bidNtceNo", "bidNtceOrd",
@@ -274,10 +346,7 @@ def format_amount(value):
 
 
 def format_message(label, record, kws):
-    title = get_first(record, [
-        "bidNtceNm", "bfSpecNm", "orderPlanNm", "prdctNm",
-        "bsnsNm", "cntrctNm", "ntceNm", "title"
-    ]) or "(제목 확인 필요)"
+    title = auto_find_title(record) or "(제목 확인 필요)"
 
     inst = get_first(record, [
         "ntceInsttNm", "orderInsttNm", "dmndInsttNm",
