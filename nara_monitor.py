@@ -17,36 +17,44 @@ KEYWORDS = [
 ]
 
 
-# 2차 필터: 도시계획/도시개발 업무 연관성
+# 2차 필터 V3: 제목(용역명) 중심 정밀 분류
 A_GRADE_KEYWORDS = [
     "도시기본계획", "도시관리계획", "지구단위계획", "도시개발",
     "도시재생", "도시정비", "정비사업", "재개발", "재건축",
-    "공공주택", "주택지구", "택지개발", "신도시", "역세권",
+    "공공주택", "주택지구", "택지개발", "신도시", "역세권개발",
     "산업단지", "산업입지", "경제자유구역", "개발제한구역",
     "노후계획도시", "도시계획시설", "토지이용계획"
 ]
 
-B_GRADE_KEYWORDS = [
-    "도시", "지역계획", "광역계획", "공간계획", "생활권", "공간구조",
-    "복합개발", "개발사업", "원도심", "활성화계획", "특구",
-    "기업도시", "투자선도지구", "기회발전특구", "평화경제특구",
-    "용도지역", "용도지구", "기반시설", "공원", "녹지",
-    "철도", "광역교통", "교통계획", "도로", "지하화", "환승센터",
-    "개발수요", "개발규모", "사업타당성", "기본구상", "마스터플랜",
-    "입지분석", "입지선정", "후보지", "스마트도시", "스마트시티",
-    "탄소중립", "기후변화", "수변", "워터프론트", "친환경"
+B_CONTEXT_KEYWORDS = [
+    "도시", "지역", "공간", "생활권", "역세권", "산업",
+    "주거", "개발", "계획", "입지", "토지이용", "원도심",
+    "특구", "스마트도시", "스마트시티", "수변", "워터프론트"
 ]
 
-EXCLUDE_KEYWORDS = [
-    "제품개발", "소프트웨어 개발", "홈페이지", "웹사이트",
-    "서버", "유지보수", "장비", "물품", "인증제품", "식품",
-    "의료", "임상", "교육", "행사", "홍보", "마케팅"
+B_TOPIC_KEYWORDS = [
+    "기본구상", "마스터플랜", "타당성", "타당성조사",
+    "입지분석", "입지선정", "후보지", "개발수요", "개발규모",
+    "광역교통", "교통계획", "환승센터", "지하화",
+    "도로", "철도", "공원", "녹지", "기반시설",
+    "탄소중립", "기후변화", "친환경"
 ]
 
-# 제외 키워드가 있어도 아래 핵심 키워드가 있으면 살려둠
-CORE_OVERRIDE_KEYWORDS = A_GRADE_KEYWORDS + [
-    "도시", "역세권", "산업단지", "공공주택", "도시재생",
-    "도시개발", "지구단위계획", "도시기본계획", "도시관리계획"
+HARD_EXCLUDE_KEYWORDS = [
+    "폐기물", "건설폐기물", "생활폐기물", "청소", "환경미화",
+    "채용", "인력파견", "위탁교육", "직원교육", "행사", "축제",
+    "홍보", "광고", "마케팅", "영상제작", "홈페이지", "웹사이트",
+    "소프트웨어", "서버", "유지보수", "전산장비", "장비구매",
+    "물품구매", "제품개발", "인증제품", "식품", "의료", "임상",
+    "건강검진", "보험", "경비용역", "방역", "소독", "세탁",
+    "급식", "운송"
+]
+
+CORE_OVERRIDE_KEYWORDS = [
+    "도시기본계획", "도시관리계획", "지구단위계획", "도시개발",
+    "도시재생", "공공주택", "주택지구", "산업단지", "산업입지",
+    "역세권", "개발제한구역", "노후계획도시", "토지이용계획",
+    "경제자유구역"
 ]
 
 SEOUL = ZoneInfo("Asia/Seoul")
@@ -162,33 +170,75 @@ def record_text(record):
 
 
 def matched_keywords(record):
-    text = record_text(record)
-    return [kw for kw in KEYWORDS if kw.lower() in text]
+    """1차 키워드도 제목(용역명)을 중심으로 검색합니다."""
+    title = auto_find_title(record)
+    if not title or title == "(용역명 확인 필요)":
+        return []
+    lower_title = title.lower()
+    return [kw for kw in KEYWORDS if kw.lower() in lower_title]
+
+
+def _normalize_title_for_match(title):
+    return (
+        title.replace(" ", "")
+             .replace("·", "")
+             .replace("-", "")
+             .replace("_", "")
+             .lower()
+    )
+
+
+def _hits_in_title(title, keywords):
+    norm = _normalize_title_for_match(title)
+    hits = []
+    for kw in keywords:
+        nkw = _normalize_title_for_match(kw)
+        if nkw and nkw in norm:
+            hits.append(kw)
+    return hits
 
 
 def classify_record(record):
     """
-    A급: 핵심 도시계획/도시개발 용역
-    B급: 연관 용역
-    제외: 2차 분야 키워드가 없거나, 제외 키워드만 강하게 포함된 경우
+    V3 정밀 분류:
+    A급 = 도시계획 핵심 업무가 제목에 직접 포함
+    B급 = 도시/개발/계획 등 맥락어 + 도로/철도/타당성 등 주제어가 함께 포함
+    제외 = 채용/폐기물/행사 등 비관련 또는 도시계획 맥락 부족
     """
-    text = record_text(record)
+    title = auto_find_title(record)
+    if not title or title == "(용역명 확인 필요)":
+        return "EXCLUDE", [], []
 
-    a_hits = [kw for kw in A_GRADE_KEYWORDS if kw.lower() in text]
-    b_hits = [kw for kw in B_GRADE_KEYWORDS if kw.lower() in text]
-    ex_hits = [kw for kw in EXCLUDE_KEYWORDS if kw.lower() in text]
-    override_hits = [kw for kw in CORE_OVERRIDE_KEYWORDS if kw.lower() in text]
+    a_hits = _hits_in_title(title, A_GRADE_KEYWORDS)
+    exclude_hits = _hits_in_title(title, HARD_EXCLUDE_KEYWORDS)
+    override_hits = _hits_in_title(title, CORE_OVERRIDE_KEYWORDS)
 
     if a_hits:
-        return "A", a_hits, ex_hits
+        return "A", a_hits, exclude_hits
 
-    if b_hits:
-        # 제외 키워드가 있어도 도시계획 핵심 키워드가 있으면 통과
-        if ex_hits and not override_hits:
-            return "EXCLUDE", b_hits, ex_hits
-        return "B", b_hits, ex_hits
+    if exclude_hits and not override_hits:
+        return "EXCLUDE", [], exclude_hits
 
-    return "EXCLUDE", [], ex_hits
+    context_hits = _hits_in_title(title, B_CONTEXT_KEYWORDS)
+    topic_hits = _hits_in_title(title, B_TOPIC_KEYWORDS)
+
+    if context_hits and topic_hits:
+        combined = []
+        for x in context_hits + topic_hits:
+            if x not in combined:
+                combined.append(x)
+        return "B", combined, exclude_hits
+
+    strong_b = _hits_in_title(title, [
+        "지역계획", "광역계획", "공간계획", "생활권계획",
+        "스마트도시", "스마트시티", "원도심활성화",
+        "투자선도지구", "기회발전특구", "평화경제특구",
+        "기업도시", "복합개발"
+    ])
+    if strong_b:
+        return "B", strong_b, exclude_hits
+
+    return "EXCLUDE", [], exclude_hits
 
 
 def get_first(record, candidates):
