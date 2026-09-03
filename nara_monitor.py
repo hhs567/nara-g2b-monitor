@@ -145,72 +145,98 @@ def get_first(record, candidates):
 
 def auto_find_title(record):
     """
-    예상한 제목 필드명이 없을 때 제목성 문자열을 자동 탐색합니다.
+    용역명/사업명을 우선 선택합니다.
+    '신규(단기)', '신규(장기)' 같은 발주구분 값은 제목으로 사용하지 않습니다.
     """
     if not isinstance(record, dict):
         return ""
 
+    generic_values = {
+        "신규(단기)", "신규(장기)", "신규", "계속", "변경", "취소",
+        "용역", "일반용역", "기술용역", "기타용역"
+    }
+
+    # 1) 용역명/사업명으로 쓰일 가능성이 높은 필드를 최우선
     explicit = [
-        "bidNtceNm", "bfSpecNm", "orderPlanNm", "prdctNm",
-        "bsnsNm", "cntrctNm", "ntceNm", "title",
-        "orderPlanUntyNm", "prdctClsfcNoNm", "prdctClsfcNm",
-        "prdctDtlNm", "publicPrcureThngNm", "bfSpecRgstNm",
-        "srvceNm", "serviceNm", "taskNm", "projectNm",
-        "bidNm", "noticeNm", "itemNm", "goodsNm"
-    ]
-    value = get_first(record, explicit)
-    if value:
-        return value
-
-    preferred_tokens = [
-        "title", "subject", "name", "nm", "ntce", "notice",
-        "bsns", "project", "task", "srvce", "service",
-        "prdct", "item", "goods", "cntrct"
-    ]
-    exclude_tokens = [
-        "instt", "agency", "org", "dept", "user", "charger",
-        "tel", "fax", "email", "addr", "date", "dt",
-        "code", "cd", "id", "url", "amount", "amt",
-        "price", "prce", "budget", "bdgt"
+        "servcNm", "serviceNm", "srvceNm",
+        "bsnsNm", "bizNm", "projectNm", "taskNm",
+        "bidNtceNm", "bfSpecNm", "prdctNm",
+        "orderPlanNm", "cntrctNm", "ntceNm",
+        "publicPrcureThngNm", "prdctDtlNm",
+        "itemNm", "goodsNm", "title"
     ]
 
-    candidates = []
+    for key in explicit:
+        val = record.get(key)
+        if val not in (None, ""):
+            s = str(val).strip()
+            if s and s not in generic_values:
+                return s
+
+    # 2) 실제 값에 '용역'이 포함된 문자열을 강하게 우선
+    service_candidates = []
     for key, value in record.items():
-        if value in (None, ""):
-            continue
-        if not isinstance(value, (str, int, float)):
+        if value in (None, "") or not isinstance(value, (str, int, float)):
             continue
 
         s = str(value).strip()
-        if len(s) < 4:
+        if not s or s in generic_values:
             continue
 
         k = str(key).lower()
-        if any(tok in k for tok in exclude_tokens):
+
+        # 기관명/코드/일자/금액/URL 등은 제목 후보에서 제외
+        if any(tok in k for tok in [
+            "instt", "agency", "org", "dept", "user", "charger",
+            "tel", "fax", "email", "addr", "date", "dt",
+            "code", "cd", "id", "url", "amount", "amt",
+            "price", "prce", "budget", "bdgt",
+            "se", "div", "type", "kind", "cl", "status"
+        ]):
             continue
 
         score = 0
-        for tok in preferred_tokens:
-            if tok in k:
-                score += 10
 
-        if any("가" <= ch <= "힣" for ch in s):
-            score += 3
+        if "용역" in s:
+            score += 100
+        if any(word in s for word in [
+            "계획", "설계", "정비", "구상", "타당성", "재생",
+            "조성", "개발", "검토", "전략", "조사", "사업화"
+        ]):
+            score += 30
 
-        score += min(len(s), 60) / 20
+        if any(tok in k for tok in [
+            "servc", "service", "srvce", "bsns", "biz",
+            "project", "task", "prdct", "item", "cntrct",
+            "ntce", "notice", "name", "nm", "title"
+        ]):
+            score += 20
+
+        # 실제 용역명은 보통 짧은 구분값보다 길다.
+        score += min(len(s), 100) / 5
 
         if score > 0:
-            candidates.append((score, s))
+            service_candidates.append((score, len(s), s))
 
-    if candidates:
-        candidates.sort(key=lambda x: x[0], reverse=True)
-        return candidates[0][1]
+    if service_candidates:
+        service_candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        return service_candidates[0][2]
 
+    # 3) 마지막 보루: '신규(단기)' 등 제외 후 가장 긴 한글 문자열
+    fallback = []
     for value in record.values():
         if isinstance(value, str):
             s = value.strip()
-            if len(s) >= 8 and "http" not in s.lower():
-                return s
+            if (
+                len(s) >= 8
+                and s not in generic_values
+                and "http" not in s.lower()
+                and any("가" <= ch <= "힣" for ch in s)
+            ):
+                fallback.append(s)
+
+    if fallback:
+        return max(fallback, key=len)
 
     return ""
 
