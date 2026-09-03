@@ -203,100 +203,102 @@ def get_first(record, candidates):
 
 def auto_find_title(record):
     """
-    용역명/사업명을 우선 선택합니다.
-    '신규(단기)', '신규(장기)' 같은 발주구분 값은 제목으로 사용하지 않습니다.
+    실제 용역명/사업명을 우선 선택합니다.
+    N/Y, 신규(단기), 코드값처럼 제목이 아닌 짧은 값을 자동 제외합니다.
     """
     if not isinstance(record, dict):
         return ""
 
-    generic_values = {
-        "신규(단기)", "신규(장기)", "신규", "계속", "변경", "취소",
+    bad_values = {
+        "N", "Y", "n", "y",
+        "신규", "신규(단기)", "신규(장기)", "계속", "변경", "취소",
         "용역", "일반용역", "기술용역", "기타용역"
     }
 
-    # 1) 용역명/사업명으로 쓰일 가능성이 높은 필드를 최우선
+    def valid_title(s):
+        if s is None:
+            return False
+        s = str(s).strip()
+        if s in bad_values:
+            return False
+        if len(s) < 5:
+            return False
+        if s.isdigit():
+            return False
+        if s.lower().startswith(("http://", "https://")):
+            return False
+        return True
+
+    # 나라장터에서 용역명/공고명으로 사용될 가능성이 높은 필드
+    # 공고/규격/사업명 계열을 제품명 계열보다 우선합니다.
     explicit = [
-        "servcNm", "serviceNm", "srvceNm",
+        "bidNtceNm", "bfSpecNm", "bfSpecRgstNm",
+        "publicPrcureThngNm", "orderPlanNm",
         "bsnsNm", "bizNm", "projectNm", "taskNm",
-        "bidNtceNm", "bfSpecNm", "prdctNm",
-        "orderPlanNm", "cntrctNm", "ntceNm",
-        "publicPrcureThngNm", "prdctDtlNm",
-        "itemNm", "goodsNm", "title"
+        "servcNm", "serviceNm", "srvceNm",
+        "cntrctNm", "ntceNm", "noticeNm",
+        "prdctDtlNm", "prdctNm", "itemNm", "goodsNm", "title"
     ]
 
     for key in explicit:
-        val = record.get(key)
-        if val not in (None, ""):
-            s = str(val).strip()
-            if s and s not in generic_values:
-                return s
+        value = record.get(key)
+        if valid_title(value):
+            return str(value).strip()
 
-    # 2) 실제 값에 '용역'이 포함된 문자열을 강하게 우선
-    service_candidates = []
+    # 예상 필드명이 없으면 레코드 전체에서 제목다운 문자열을 점수화합니다.
+    candidates = []
     for key, value in record.items():
-        if value in (None, "") or not isinstance(value, (str, int, float)):
+        if not valid_title(value):
             continue
 
         s = str(value).strip()
-        if not s or s in generic_values:
-            continue
-
         k = str(key).lower()
 
-        # 기관명/코드/일자/금액/URL 등은 제목 후보에서 제외
+        # 제목으로 쓰면 안 되는 메타데이터
         if any(tok in k for tok in [
             "instt", "agency", "org", "dept", "user", "charger",
             "tel", "fax", "email", "addr", "date", "dt",
             "code", "cd", "id", "url", "amount", "amt",
             "price", "prce", "budget", "bdgt",
-            "se", "div", "type", "kind", "cl", "status"
+            "yn", "flag", "status"
         ]):
             continue
 
         score = 0
 
+        # 필드명 자체가 공고명/사업명/용역명 계열이면 최우선
+        if any(tok in k for tok in [
+            "ntcenm", "specnm", "bsnsnm", "biznm", "projectnm",
+            "tasknm", "servcnm", "servicenm", "srvcenm",
+            "cntrctnm", "noticenm", "title"
+        ]):
+            score += 150
+
+        # 실제 문자열 내용이 용역명답다면 가점
         if "용역" in s:
             score += 100
-        if any(word in s for word in [
-            "계획", "설계", "정비", "구상", "타당성", "재생",
-            "조성", "개발", "검토", "전략", "조사", "사업화"
-        ]):
-            score += 30
 
-        if any(tok in k for tok in [
-            "servc", "service", "srvce", "bsns", "biz",
-            "project", "task", "prdct", "item", "cntrct",
-            "ntce", "notice", "name", "nm", "title"
-        ]):
-            score += 20
+        for word in [
+            "계획", "설계", "정비", "구상", "타당성", "지정", "재생",
+            "조성", "시행", "개발", "검토", "후보지", "전략", "조사",
+            "사업화", "도시", "산업단지", "공공주택", "역세권"
+        ]:
+            if word in s:
+                score += 20
 
-        # 실제 용역명은 보통 짧은 구분값보다 길다.
-        score += min(len(s), 100) / 5
+        if any("가" <= ch <= "힣" for ch in s):
+            score += 10
 
-        if score > 0:
-            service_candidates.append((score, len(s), s))
+        # 지나치게 짧은 값보다 문장형 사업명을 우선
+        score += min(len(s), 120) / 4
 
-    if service_candidates:
-        service_candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
-        return service_candidates[0][2]
+        candidates.append((score, len(s), s))
 
-    # 3) 마지막 보루: '신규(단기)' 등 제외 후 가장 긴 한글 문자열
-    fallback = []
-    for value in record.values():
-        if isinstance(value, str):
-            s = value.strip()
-            if (
-                len(s) >= 8
-                and s not in generic_values
-                and "http" not in s.lower()
-                and any("가" <= ch <= "힣" for ch in s)
-            ):
-                fallback.append(s)
+    if candidates:
+        candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        return candidates[0][2]
 
-    if fallback:
-        return max(fallback, key=len)
-
-    return ""
+    return "(용역명 확인 필요)"
 
 
 def make_unique_key(label, record):
