@@ -1,0 +1,50 @@
+name: Budget Source Monitor
+
+on:
+  workflow_dispatch:
+
+  schedule:
+    - cron: "30 0 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  budget-source-monitor:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install packages
+        run: |
+          pip install requests beautifulsoup4
+
+      - name: Run budget source monitor
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python budget_source_monitor.py
+
+      - name: Save budget sources
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add budget_sources.json
+
+          if ! git diff --cached --quiet; then
+            git commit -m "Update budget source history"
+            git push
+          else
+            echo "No new budget sources"
+          fi
