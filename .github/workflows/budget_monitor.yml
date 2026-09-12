@@ -11,7 +11,6 @@ permissions:
 
 jobs:
   budget-monitor:
-
     runs-on: ubuntu-latest
 
     steps:
@@ -39,25 +38,17 @@ jobs:
       - name: Save budget history
         run: |
           if [ -f seen_budget_ids.json ]; then
-
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
             git add seen_budget_ids.json
 
             if ! git diff --cached --quiet; then
-
               git commit -m "Update budget monitor history"
               git push
-
             else
-
               echo "No budget history changes"
-
             fi
-
           else
-
             echo "seen_budget_ids.json does not exist"
-
           fi
