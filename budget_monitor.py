@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 
 # ============================================================
 # 지방재정365 세부사업별 세출현황 API 테스트
+# - 오늘 기준 30일 전 데이터 조회
 # ============================================================
 
 API_URL = "https://www.lofin365.go.kr/lf/hub/QWGJK"
@@ -20,8 +21,14 @@ if not API_KEY:
 
 KST = datetime.utcnow() + timedelta(hours=9)
 
+# 회계연도
 YEAR = str(KST.year)
-EXEC_DATE = KST.strftime("%Y%m%d")
+
+# 오늘 기준 30일 전
+TARGET_DATE = KST - timedelta(days=30)
+
+# 집행일자 형식: YYYYMMDD
+EXEC_DATE = TARGET_DATE.strftime("%Y%m%d")
 
 # ------------------------------------------------------------
 # API 요청 파라미터
@@ -43,9 +50,13 @@ print("지방재정365 API 연결 테스트")
 print("=" * 60)
 
 print("회계연도:", YEAR)
+print("조회 기준:", "오늘 기준 30일 전")
 print("집행일자:", EXEC_DATE)
 
-# 인증키를 숨긴 요청 URL 확인용
+# ------------------------------------------------------------
+# 인증키를 숨긴 요청 URL 확인
+# ------------------------------------------------------------
+
 prepared = requests.Request(
     "GET",
     API_URL,
@@ -72,8 +83,6 @@ for attempt in range(1, 4):
         response = requests.get(
             API_URL,
             params=params,
-
-            # 연결 60초 / 응답 60초
             timeout=(60, 60)
         )
 
@@ -110,17 +119,13 @@ for attempt in range(1, 4):
         raise
 
 # ------------------------------------------------------------
-# HTTP 오류 확인
+# 응답 확인
 # ------------------------------------------------------------
 
 if response is None:
     raise RuntimeError("API 응답을 받지 못했습니다.")
 
 response.raise_for_status()
-
-# ------------------------------------------------------------
-# API 응답 출력
-# ------------------------------------------------------------
 
 print()
 print("=" * 60)
