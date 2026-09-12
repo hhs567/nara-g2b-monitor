@@ -2,10 +2,20 @@ import os
 import json
 import time
 import requests
+import urllib3
 
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 from datetime import datetime
+
+
+# ============================================================
+# SSL 경고 숨김
+# ============================================================
+
+urllib3.disable_warnings(
+    urllib3.exceptions.InsecureRequestWarning
+)
 
 
 # ============================================================
@@ -26,10 +36,14 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 
 if not TELEGRAM_BOT_TOKEN:
-    raise ValueError("TELEGRAM_BOT_TOKEN이 없습니다.")
+    raise ValueError(
+        "TELEGRAM_BOT_TOKEN이 설정되어 있지 않습니다."
+    )
 
 if not TELEGRAM_CHAT_ID:
-    raise ValueError("TELEGRAM_CHAT_ID가 없습니다.")
+    raise ValueError(
+        "TELEGRAM_CHAT_ID가 설정되어 있지 않습니다."
+    )
 
 
 # ============================================================
@@ -52,11 +66,19 @@ BUDGET_KEYWORDS = [
 
 HEADERS = {
     "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 Chrome/120 Safari/537.36"
-    )
+        "Mozilla/5.0 "
+        "(Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 "
+        "(KHTML, like Gecko) "
+        "Chrome/120.0 Safari/537.36"
+    ),
+    "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
 }
 
+
+# ============================================================
+# 웹페이지 접속
+# ============================================================
 
 def get_html(url):
 
@@ -68,18 +90,58 @@ def get_html(url):
                 f"웹페이지 접속 {attempt}/3"
             )
 
-            response = requests.get(
-                url,
-                headers=HEADERS,
-                timeout=30
-            )
+            try:
+
+                # ------------------------------------------------
+                # 1차: 정상 SSL 검증
+                # ------------------------------------------------
+
+                response = requests.get(
+                    url,
+                    headers=HEADERS,
+                    timeout=30,
+                    verify=True
+                )
+
+            except requests.exceptions.SSLError:
+
+                # ------------------------------------------------
+                # 의정부시 홈페이지처럼
+                # GitHub Actions에서 인증서 체인 검증이
+                # 실패하는 경우에만 SSL 검증 없이 재접속
+                # ------------------------------------------------
+
+                print(
+                    "SSL 인증서 검증 실패 "
+                    "→ SSL 검증 없이 재접속"
+                )
+
+                response = requests.get(
+                    url,
+                    headers=HEADERS,
+                    timeout=30,
+                    verify=False
+                )
 
             response.raise_for_status()
 
-            response.encoding = (
-                response.apparent_encoding
-                or "utf-8"
-            )
+            # ------------------------------------------------
+            # 한글 인코딩 처리
+            # ------------------------------------------------
+
+            if (
+                not response.encoding
+                or response.encoding.lower()
+                in [
+                    "iso-8859-1",
+                    "ascii"
+                ]
+            ):
+
+                response.encoding = (
+                    response.apparent_encoding
+                    or "utf-8"
+                )
 
             return response.text
 
@@ -94,6 +156,8 @@ def get_html(url):
                 raise
 
             time.sleep(5)
+
+    return ""
 
 
 # ============================================================
@@ -112,7 +176,10 @@ def load_sources():
 
             data = json.load(f)
 
-            if isinstance(data, dict):
+            if isinstance(
+                data,
+                dict
+            ):
                 return data
 
             return {}
@@ -178,15 +245,31 @@ def send_telegram(message):
 
 
 # ============================================================
-# 추경 제목 여부
+# 제목 정리
+# ============================================================
+
+def normalize_text(text):
+
+    if not text:
+        return ""
+
+    return (
+        str(text)
+        .replace("\xa0", " ")
+        .replace("\n", " ")
+        .replace("\r", " ")
+        .strip()
+    )
+
+
+# ============================================================
+# 추경예산서 여부
 # ============================================================
 
 def is_budget_title(title):
 
-    title = (
+    title = normalize_text(
         title
-        .replace("\xa0", " ")
-        .strip()
     )
 
     if TARGET_YEAR not in title:
@@ -203,6 +286,10 @@ def is_budget_title(title):
 # ============================================================
 
 def detect_budget_round(title):
+
+    title = normalize_text(
+        title
+    )
 
     if "제5회" in title:
         return "제5회 추가경정예산서"
@@ -244,9 +331,11 @@ def find_budget_posts():
         href=True
     ):
 
-        title = link.get_text(
-            " ",
-            strip=True
+        title = normalize_text(
+            link.get_text(
+                " ",
+                strip=True
+            )
         )
 
         if not title:
@@ -262,6 +351,9 @@ def find_budget_posts():
             ""
         )
 
+        if not href:
+            continue
+
         detail_url = urljoin(
             BASE_URL,
             href
@@ -272,7 +364,10 @@ def find_budget_posts():
             "detail_url": detail_url,
         })
 
+    # --------------------------------------------------------
     # 중복 제거
+    # --------------------------------------------------------
+
     unique = {}
 
     for post in posts:
@@ -291,7 +386,7 @@ def find_budget_posts():
 
 
 # ============================================================
-# 상세페이지에서 PDF 찾기
+# 상세페이지에서 첨부파일 후보 찾기
 # ============================================================
 
 def find_pdf_links(detail_url):
@@ -305,21 +400,25 @@ def find_pdf_links(detail_url):
         "html.parser"
     )
 
-    pdfs = []
+    files = []
 
     for link in soup.find_all(
         "a",
         href=True
     ):
 
-        href = link.get(
-            "href",
-            ""
+        href = normalize_text(
+            link.get(
+                "href",
+                ""
+            )
         )
 
-        text = link.get_text(
-            " ",
-            strip=True
+        text = normalize_text(
+            link.get_text(
+                " ",
+                strip=True
+            )
         )
 
         combined = (
@@ -328,12 +427,18 @@ def find_pdf_links(detail_url):
             + text
         ).lower()
 
+        # ----------------------------------------------------
         # PDF 또는 파일 다운로드 링크 추정
-        if (
-            ".pdf" not in combined
-            and "download" not in combined
-            and "file" not in combined
-        ):
+        # ----------------------------------------------------
+
+        if not any([
+            ".pdf" in combined,
+            "download" in combined,
+            "file" in combined,
+            "atch" in combined,
+            "첨부" in combined,
+            "바로보기" in combined,
+        ]):
             continue
 
         full_url = urljoin(
@@ -341,15 +446,18 @@ def find_pdf_links(detail_url):
             href
         )
 
-        pdfs.append({
+        files.append({
             "name": text,
             "url": full_url,
         })
 
+    # --------------------------------------------------------
     # 중복 제거
+    # --------------------------------------------------------
+
     unique = {}
 
-    for item in pdfs:
+    for item in files:
 
         unique[
             item["url"]
@@ -361,7 +469,7 @@ def find_pdf_links(detail_url):
 
 
 # ============================================================
-# 게시물 ID 생성
+# 게시물 고유 ID 생성
 # ============================================================
 
 def make_source_id(post):
@@ -391,16 +499,34 @@ print(
     TARGET_YEAR
 )
 
+print()
+
+
+# ============================================================
+# 기존 기록 불러오기
+# ============================================================
+
 sources = load_sources()
+
+
+# ============================================================
+# 추경 게시물 찾기
+# ============================================================
 
 posts = find_budget_posts()
 
-print()
 print(
     "추경예산서 발견:",
     len(posts),
     "건"
 )
+
+
+# ============================================================
+# 게시물별 처리
+# ============================================================
+
+new_count = 0
 
 
 for post in posts:
@@ -411,6 +537,7 @@ for post in posts:
 
     print()
     print("-" * 70)
+
     print(
         "제목:",
         post["title"]
@@ -420,6 +547,11 @@ for post in posts:
         "상세:",
         post["detail_url"]
     )
+
+
+    # --------------------------------------------------------
+    # 상세페이지 첨부파일 확인
+    # --------------------------------------------------------
 
     pdf_links = find_pdf_links(
         post["detail_url"]
@@ -434,36 +566,41 @@ for post in posts:
     for pdf in pdf_links:
 
         print(
-            "첨부:",
+            "첨부파일명:",
             pdf["name"]
         )
 
         print(
-            "URL:",
+            "첨부 URL:",
             pdf["url"]
         )
 
 
     # --------------------------------------------------------
-    # 이미 저장된 게시물
+    # 이미 확인한 게시물
     # --------------------------------------------------------
 
     if source_id in sources:
 
         print(
-            "기존 확인 자료"
+            "기존 확인 자료 → 알림 생략"
         )
 
         continue
 
 
     # --------------------------------------------------------
-    # 신규 출처 저장
+    # 추경 회차
     # --------------------------------------------------------
 
     budget_round = detect_budget_round(
         post["title"]
     )
+
+
+    # --------------------------------------------------------
+    # 신규 출처 저장
+    # --------------------------------------------------------
 
     sources[source_id] = {
 
@@ -473,11 +610,15 @@ for post in posts:
 
         "year": TARGET_YEAR,
 
-        "budget_title": post["title"],
+        "budget_title": post[
+            "title"
+        ],
 
         "budget_round": budget_round,
 
-        "detail_url": post["detail_url"],
+        "detail_url": post[
+            "detail_url"
+        ],
 
         "pdf_files": pdf_links,
 
@@ -488,22 +629,27 @@ for post in posts:
 
 
     # --------------------------------------------------------
-    # 신규 추경 텔레그램
+    # 텔레그램 메시지
     # --------------------------------------------------------
 
     message = (
         "📑 [신규 추경예산서 발견]\n\n"
 
-        "📍 경기도 의정부시\n"
+        "📍 경기도 의정부시\n\n"
 
         f"📌 {post['title']}\n\n"
 
-        f"🔎 구분 : {budget_round}\n\n"
+        f"🔎 구분 : "
+        f"{budget_round}\n\n"
 
         "🔗 예산서 게시물\n"
         f"{post['detail_url']}"
     )
 
+
+    # --------------------------------------------------------
+    # 첨부파일 표시
+    # --------------------------------------------------------
 
     if pdf_links:
 
@@ -511,6 +657,38 @@ for post in posts:
             "\n\n📄 첨부파일 확인됨"
         )
 
+        # 첫 번째 파일만 메시지에 표시
+        first_pdf = pdf_links[0]
+
+        if first_pdf.get(
+            "name"
+        ):
+
+            message += (
+                "\n"
+                f"{first_pdf['name']}"
+            )
+
+        if first_pdf.get(
+            "url"
+        ):
+
+            message += (
+                "\n"
+                f"{first_pdf['url']}"
+            )
+
+    else:
+
+        message += (
+            "\n\n⚠ 첨부파일 링크를 "
+            "자동 확인하지 못했습니다."
+        )
+
+
+    # --------------------------------------------------------
+    # 텔레그램 발송
+    # --------------------------------------------------------
 
     try:
 
@@ -521,6 +699,8 @@ for post in posts:
         print(
             "텔레그램 전송 완료"
         )
+
+        new_count += 1
 
     except Exception as e:
 
@@ -538,12 +718,26 @@ save_sources(
     sources
 )
 
+
+# ============================================================
+# 종료
+# ============================================================
+
 print()
 print("=" * 70)
+
+print(
+    "신규 추경예산서:",
+    new_count,
+    "건"
+)
+
 print(
     "저장된 예산서 출처:",
     len(sources),
     "건"
 )
+
 print("모니터 종료")
+
 print("=" * 70)
