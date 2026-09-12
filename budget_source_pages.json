@@ -1,9 +1,382 @@
 {
+  "수원시": {
+    "region": "경기도",
+    "source_name": "수원시 공식 예산정보",
+    "source_url": ""
+  },
+  "용인시": {
+    "region": "경기도",
+    "source_name": "용인시 공식 예산정보",
+    "source_url": ""
+  },
+  "고양시": {
+    "region": "경기도",
+    "source_name": "고양시 공식 예산정보",
+    "source_url": ""
+  },
+  "화성시": {
+    "region": "경기도",
+    "source_name": "화성시 공식 예산정보",
+    "source_url": ""
+  },
+  "성남시": {
+    "region": "경기도",
+    "source_name": "성남시 공식 예산정보",
+    "source_url": ""
+  },
+  "부천시": {
+    "region": "경기도",
+    "source_name": "부천시 공식 예산정보",
+    "source_url": ""
+  },
+  "남양주시": {
+    "region": "경기도",
+    "source_name": "남양주시 공식 예산정보",
+    "source_url": ""
+  },
+  "안산시": {
+    "region": "경기도",
+    "source_name": "안산시 공식 예산정보",
+    "source_url": ""
+  },
+  "평택시": {
+    "region": "경기도",
+    "source_name": "평택시 공식 예산정보",
+    "source_url": ""
+  },
+  "안양시": {
+    "region": "경기도",
+    "source_name": "안양시 공식 예산정보",
+    "source_url": ""
+  },
+  "시흥시": {
+    "region": "경기도",
+    "source_name": "시흥시 공식 예산정보",
+    "source_url": ""
+  },
+  "파주시": {
+    "region": "경기도",
+    "source_name": "파주시 공식 예산정보",
+    "source_url": ""
+  },
+  "김포시": {
+    "region": "경기도",
+    "source_name": "김포시 공식 예산정보",
+    "source_url": ""
+  },
   "의정부시": {
     "region": "경기도",
     "source_name": "의정부시 공식 예산현황",
     "source_url": "https://www.ui4u.go.kr/portal/bbs/list.do?mId=0107010100&ptIdx=64",
     "latest_budget_title": "2026년 제2회 추가경정예산서",
     "latest_budget_date": "2026-05-27"
+  },
+  "광주시": {
+    "region": "경기도",
+    "source_name": "광주시 공식 예산정보",
+    "source_url": "https://new.gccity.go.kr/portal/budgetStatus/list.do?mId=0203150501"
+  },
+  "하남시": {
+    "region": "경기도",
+    "source_name": "하남시 공식 예산정보",
+    "source_url": ""
+  },
+  "광명시": {
+    "region": "경기도",
+    "source_name": "광명시 공식 예산정보",
+    "source_url": ""
+  },
+  "군포시": {
+    "region": "경기도",
+    "source_name": "군포시 공식 예산정보",
+    "source_url": ""
+  },
+  "양주시": {
+    "region": "경기도",
+    "source_name": "양주시 공식 예산정보",
+    "source_url": ""
+  },
+  "오산시": {
+    "region": "경기도",
+    "source_name": "오산시 공식 예산정보",
+    "source_url": ""
+  },
+  "이천시": {
+    "region": "경기도",
+    "source_name": "이천시 공식 예산정보",
+    "source_url": ""
+  },
+  "안성시": {
+    "region": "경기도",
+    "source_name": "안성시 공식 예산정보",
+    "source_url": ""
+  },
+  "구리시": {
+    "region": "경기도",
+    "source_name": "구리시 공식 예산정보",
+    "source_url": ""
+  },
+  "의왕시": {
+    "region": "경기도",
+    "source_name": "의왕시 공식 예산정보",
+    "source_url": ""
+  },
+  "포천시": {
+    "region": "경기도",
+    "source_name": "포천시 공식 예산정보",
+    "source_url": ""
+  },
+  "양평군": {
+    "region": "경기도",
+    "source_name": "양평군 공식 예산정보",
+    "source_url": ""
+  },
+  "여주시": {
+    "region": "경기도",
+    "source_name": "여주시 공식 예산정보",
+    "source_url": ""
+  },
+  "동두천시": {
+    "region": "경기도",
+    "source_name": "동두천시 공식 예산정보",
+    "source_url": ""
+  },
+  "과천시": {
+    "region": "경기도",
+    "source_name": "과천시 공식 예산정보",
+    "source_url": ""
+  },
+  "가평군": {
+    "region": "경기도",
+    "source_name": "가평군 공식 예산정보",
+    "source_url": ""
+  },
+  "연천군": {
+    "region": "경기도",
+    "source_name": "연천군 공식 예산정보",
+    "source_url": ""
+  },
+
+  "춘천시": {
+    "region": "강원특별자치도",
+    "source_name": "춘천시 공식 예산정보",
+    "source_url": ""
+  },
+  "원주시": {
+    "region": "강원특별자치도",
+    "source_name": "원주시 공식 예산정보",
+    "source_url": ""
+  },
+  "강릉시": {
+    "region": "강원특별자치도",
+    "source_name": "강릉시 공식 예산정보",
+    "source_url": ""
+  },
+  "동해시": {
+    "region": "강원특별자치도",
+    "source_name": "동해시 공식 예산정보",
+    "source_url": ""
+  },
+  "태백시": {
+    "region": "강원특별자치도",
+    "source_name": "태백시 공식 예산정보",
+    "source_url": ""
+  },
+  "속초시": {
+    "region": "강원특별자치도",
+    "source_name": "속초시 공식 예산정보",
+    "source_url": ""
+  },
+  "삼척시": {
+    "region": "강원특별자치도",
+    "source_name": "삼척시 공식 예산정보",
+    "source_url": ""
+  },
+  "홍천군": {
+    "region": "강원특별자치도",
+    "source_name": "홍천군 공식 예산정보",
+    "source_url": ""
+  },
+  "횡성군": {
+    "region": "강원특별자치도",
+    "source_name": "횡성군 공식 예산정보",
+    "source_url": ""
+  },
+  "영월군": {
+    "region": "강원특별자치도",
+    "source_name": "영월군 공식 예산정보",
+    "source_url": ""
+  },
+  "평창군": {
+    "region": "강원특별자치도",
+    "source_name": "평창군 공식 예산정보",
+    "source_url": ""
+  },
+  "정선군": {
+    "region": "강원특별자치도",
+    "source_name": "정선군 공식 예산정보",
+    "source_url": ""
+  },
+  "철원군": {
+    "region": "강원특별자치도",
+    "source_name": "철원군 공식 예산정보",
+    "source_url": ""
+  },
+  "화천군": {
+    "region": "강원특별자치도",
+    "source_name": "화천군 공식 예산정보",
+    "source_url": ""
+  },
+  "양구군": {
+    "region": "강원특별자치도",
+    "source_name": "양구군 공식 예산정보",
+    "source_url": ""
+  },
+  "인제군": {
+    "region": "강원특별자치도",
+    "source_name": "인제군 공식 예산정보",
+    "source_url": ""
+  },
+  "고성군": {
+    "region": "강원특별자치도",
+    "source_name": "고성군 공식 예산정보",
+    "source_url": ""
+  },
+  "양양군": {
+    "region": "강원특별자치도",
+    "source_name": "양양군 공식 예산정보",
+    "source_url": ""
+  },
+
+  "청주시": {
+    "region": "충청북도",
+    "source_name": "청주시 공식 예산정보",
+    "source_url": ""
+  },
+  "충주시": {
+    "region": "충청북도",
+    "source_name": "충주시 공식 예산정보",
+    "source_url": ""
+  },
+  "제천시": {
+    "region": "충청북도",
+    "source_name": "제천시 공식 예산정보",
+    "source_url": ""
+  },
+  "보은군": {
+    "region": "충청북도",
+    "source_name": "보은군 공식 예산정보",
+    "source_url": ""
+  },
+  "옥천군": {
+    "region": "충청북도",
+    "source_name": "옥천군 공식 예산정보",
+    "source_url": ""
+  },
+  "영동군": {
+    "region": "충청북도",
+    "source_name": "영동군 공식 예산정보",
+    "source_url": ""
+  },
+  "증평군": {
+    "region": "충청북도",
+    "source_name": "증평군 공식 예산정보",
+    "source_url": ""
+  },
+  "진천군": {
+    "region": "충청북도",
+    "source_name": "진천군 공식 예산정보",
+    "source_url": ""
+  },
+  "괴산군": {
+    "region": "충청북도",
+    "source_name": "괴산군 공식 예산정보",
+    "source_url": ""
+  },
+  "음성군": {
+    "region": "충청북도",
+    "source_name": "음성군 공식 예산정보",
+    "source_url": ""
+  },
+  "단양군": {
+    "region": "충청북도",
+    "source_name": "단양군 공식 예산정보",
+    "source_url": ""
+  },
+
+  "천안시": {
+    "region": "충청남도",
+    "source_name": "천안시 공식 예산정보",
+    "source_url": ""
+  },
+  "공주시": {
+    "region": "충청남도",
+    "source_name": "공주시 공식 예산정보",
+    "source_url": ""
+  },
+  "보령시": {
+    "region": "충청남도",
+    "source_name": "보령시 공식 예산정보",
+    "source_url": ""
+  },
+  "아산시": {
+    "region": "충청남도",
+    "source_name": "아산시 공식 예산정보",
+    "source_url": ""
+  },
+  "서산시": {
+    "region": "충청남도",
+    "source_name": "서산시 공식 예산정보",
+    "source_url": ""
+  },
+  "논산시": {
+    "region": "충청남도",
+    "source_name": "논산시 공식 예산정보",
+    "source_url": ""
+  },
+  "계룡시": {
+    "region": "충청남도",
+    "source_name": "계룡시 공식 예산정보",
+    "source_url": ""
+  },
+  "당진시": {
+    "region": "충청남도",
+    "source_name": "당진시 공식 예산정보",
+    "source_url": ""
+  },
+  "금산군": {
+    "region": "충청남도",
+    "source_name": "금산군 공식 예산정보",
+    "source_url": ""
+  },
+  "부여군": {
+    "region": "충청남도",
+    "source_name": "부여군 공식 예산정보",
+    "source_url": ""
+  },
+  "서천군": {
+    "region": "충청남도",
+    "source_name": "서천군 공식 예산정보",
+    "source_url": ""
+  },
+  "청양군": {
+    "region": "충청남도",
+    "source_name": "청양군 공식 예산정보",
+    "source_url": ""
+  },
+  "홍성군": {
+    "region": "충청남도",
+    "source_name": "홍성군 공식 예산정보",
+    "source_url": ""
+  },
+  "예산군": {
+    "region": "충청남도",
+    "source_name": "예산군 공식 예산정보",
+    "source_url": ""
+  },
+  "태안군": {
+    "region": "충청남도",
+    "source_name": "태안군 공식 예산정보",
+    "source_url": ""
   }
 }
