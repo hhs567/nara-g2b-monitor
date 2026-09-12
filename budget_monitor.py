@@ -3,6 +3,7 @@ import json
 import time
 import hashlib
 import requests
+
 from datetime import datetime, timedelta
 
 
@@ -17,6 +18,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 SEEN_FILE = "seen_budget_ids.json"
+
 
 if not API_KEY:
     raise ValueError("LOFIN_API_KEY가 설정되어 있지 않습니다.")
@@ -41,6 +43,19 @@ TARGET_REGIONS = {
 
 
 # ============================================================
+# 공식 예산서 게시판
+# 확인된 지자체부터 추가
+# ============================================================
+
+BUDGET_SOURCE_PAGES = {
+    "의정부시": (
+        "https://www.ui4u.go.kr/portal/bbs/list.do"
+        "?mId=0107010100&ptIdx=64"
+    ),
+}
+
+
+# ============================================================
 # 도시계획 핵심 키워드
 # ============================================================
 
@@ -49,9 +64,9 @@ STRONG_KEYWORDS = [
     "도시관리계획",
     "도시계획",
     "지구단위계획",
+    "성장관리계획",
     "도시개발",
     "도시재생",
-    "성장관리계획",
     "정비계획",
     "개발계획",
     "실시계획",
@@ -67,8 +82,7 @@ STRONG_KEYWORDS = [
 
 
 # ============================================================
-# 보조 도시계획 키워드
-# 단독으로는 통과시키지 않음
+# 보조 키워드
 # ============================================================
 
 SUPPORT_KEYWORDS = [
@@ -86,7 +100,6 @@ SUPPORT_KEYWORDS = [
     "사업화",
     "설계",
     "기본계획",
-    "기본설계",
 ]
 
 
@@ -116,7 +129,7 @@ SERVICE_KEYWORDS = [
 
 
 # ============================================================
-# 일반 행정성 / 비대상 사업 제외 키워드
+# 일반 행정 / 비대상 사업 제외 키워드
 # ============================================================
 
 EXCLUDE_KEYWORDS = [
@@ -173,67 +186,78 @@ EXCLUDE_KEYWORDS = [
 
 # ============================================================
 # 날짜 설정
-# 현재는 자료 안정성을 위해 30일 전 자료 조회
+# 현재 안정적으로 데이터가 확인되는 30일 전 기준
 # ============================================================
 
 KST = datetime.utcnow() + timedelta(hours=9)
-
 YEAR = str(KST.year)
 
 TARGET_DATE = KST - timedelta(days=30)
-
 EXEC_DATE = TARGET_DATE.strftime("%Y%m%d")
 
 
-print("=" * 70)
-print("지방재정365 도시계획 용역 모니터")
-print("=" * 70)
-
+print("=" * 75)
+print("지방재정365 도시계획 신규 용역 통합 모니터")
+print("=" * 75)
 print("회계연도:", YEAR)
-print("조회일자:", EXEC_DATE)
+print("조회 기준일:", EXEC_DATE)
 print("대상지역:", ", ".join(TARGET_REGIONS.values()))
 
 
 # ============================================================
-# 기존 확인 사업 이력
+# 숫자 변환
+# ============================================================
+
+def safe_int(value):
+
+    try:
+
+        if value is None:
+            return 0
+
+        if isinstance(value, str):
+            value = value.replace(",", "").strip()
+
+        if value == "":
+            return 0
+
+        return int(float(value))
+
+    except Exception:
+        return 0
+
+
+def format_money(value):
+    return f"{safe_int(value):,}원"
+
+
+# ============================================================
+# 기존 알림 이력
 # ============================================================
 
 def load_seen_ids():
 
     try:
 
-        with open(
-            SEEN_FILE,
-            "r",
-            encoding="utf-8"
-        ) as f:
+        with open(SEEN_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
 
-            return set(
-                json.load(f)
-            )
+            if isinstance(data, list):
+                return set(data)
+
+            return set()
 
     except FileNotFoundError:
-
         return set()
 
     except Exception as e:
-
-        print(
-            "기존 이력 읽기 오류:",
-            e
-        )
-
+        print("기존 이력 읽기 오류:", e)
         return set()
 
 
 def save_seen_ids(seen_ids):
 
-    with open(
-        SEEN_FILE,
-        "w",
-        encoding="utf-8"
-    ) as f:
-
+    with open(SEEN_FILE, "w", encoding="utf-8") as f:
         json.dump(
             sorted(list(seen_ids)),
             f,
@@ -272,64 +296,19 @@ def send_telegram(message):
 
 
 # ============================================================
-# 숫자 변환
-# ============================================================
-
-def safe_int(value):
-
-    try:
-
-        if value is None:
-            return 0
-
-        if isinstance(
-            value,
-            str
-        ):
-
-            value = value.replace(
-                ",",
-                ""
-            ).strip()
-
-        if value == "":
-            return 0
-
-        return int(
-            float(value)
-        )
-
-    except Exception:
-
-        return 0
-
-
-def format_money(value):
-
-    value = safe_int(
-        value
-    )
-
-    return f"{value:,}원"
-
-
-# ============================================================
-# 일반 행정사업 여부
+# 일반행정 제외
 # ============================================================
 
 def is_excluded_project(project_name):
 
-    for keyword in EXCLUDE_KEYWORDS:
-
-        if keyword in project_name:
-
-            return True
-
-    return False
+    return any(
+        keyword in project_name
+        for keyword in EXCLUDE_KEYWORDS
+    )
 
 
 # ============================================================
-# 도시계획 + 용역 관련성 판별
+# 도시계획 관련성 판별
 # ============================================================
 
 def detect_keywords(project_name):
@@ -352,24 +331,7 @@ def detect_keywords(project_name):
         if keyword in project_name
     ]
 
-    # --------------------------------------------------------
-    # 핵심 도시계획 키워드 + 용역성 표현
-    # --------------------------------------------------------
-
-    if strong_hits and service_hits:
-
-        return (
-            True,
-            strong_hits,
-            support_hits,
-            service_hits
-        )
-
-    # --------------------------------------------------------
-    # 핵심 도시계획 키워드 자체가 매우 명확한 경우
-    # --------------------------------------------------------
-
-    VERY_STRONG = [
+    very_strong = [
         "도시기본계획",
         "도시관리계획",
         "지구단위계획",
@@ -378,49 +340,29 @@ def detect_keywords(project_name):
 
     if any(
         keyword in project_name
-        for keyword in VERY_STRONG
+        for keyword in very_strong
     ):
+        return True, strong_hits, support_hits, service_hits
 
-        return (
-            True,
-            strong_hits,
-            support_hits,
-            service_hits
-        )
-
-    # --------------------------------------------------------
-    # 일반 도시계획 표현은
-    # 보조키워드 + 용역키워드가 모두 있어야 함
-    # --------------------------------------------------------
+    if strong_hits and service_hits:
+        return True, strong_hits, support_hits, service_hits
 
     if support_hits and service_hits:
+        return True, strong_hits, support_hits, service_hits
 
-        return (
-            True,
-            strong_hits,
-            support_hits,
-            service_hits
-        )
-
-    return (
-        False,
-        strong_hits,
-        support_hits,
-        service_hits
-    )
+    return False, strong_hits, support_hits, service_hits
 
 
 # ============================================================
-# 발주 가능성 평가
+# 발주가능성 평가
 # ============================================================
 
 def calculate_rating(
     project_name,
     strong_hits,
-    service_hits,
+    service_hits
 ):
 
-    # ★★★★★
     five_star_keywords = [
         "도시기본계획",
         "도시관리계획",
@@ -432,18 +374,11 @@ def calculate_rating(
         keyword in project_name
         for keyword in five_star_keywords
     ):
-
         return "★★★★★", "매우 높음"
 
-    # ★★★★★
-    if (
-        strong_hits
-        and "용역" in project_name
-    ):
-
+    if strong_hits and "용역" in project_name:
         return "★★★★★", "매우 높음"
 
-    # ★★★★
     four_star_keywords = [
         "기본구상",
         "타당성조사",
@@ -459,15 +394,11 @@ def calculate_rating(
         keyword in project_name
         for keyword in four_star_keywords
     ):
-
         return "★★★★", "높음"
 
-    # ★★★★
     if strong_hits and service_hits:
-
         return "★★★★", "높음"
 
-    # 나머지 통과 사업
     return "★★★", "검토 필요"
 
 
@@ -478,48 +409,16 @@ def calculate_rating(
 def make_project_id(row):
 
     raw = "|".join([
-        str(
-            row.get(
-                "fyr",
-                ""
-            )
-        ),
-        str(
-            row.get(
-                "wa_laf_cd",
-                ""
-            )
-        ),
-        str(
-            row.get(
-                "laf_cd",
-                ""
-            )
-        ),
-        str(
-            row.get(
-                "dept_cd",
-                ""
-            )
-        ),
-        str(
-            row.get(
-                "dbiz_cd",
-                ""
-            )
-        ),
-        str(
-            row.get(
-                "dbiz_nm",
-                ""
-            )
-        ),
+        str(row.get("fyr", "")),
+        str(row.get("wa_laf_cd", "")),
+        str(row.get("laf_cd", "")),
+        str(row.get("dept_cd", "")),
+        str(row.get("dbiz_cd", "")),
+        str(row.get("dbiz_nm", "")),
     ])
 
     return hashlib.sha256(
-        raw.encode(
-            "utf-8"
-        )
+        raw.encode("utf-8")
     ).hexdigest()
 
 
@@ -536,34 +435,27 @@ def call_api(
     params = {
         "Key": API_KEY,
         "Type": "json",
-
         "pIndex": page_index,
         "pSize": page_size,
-
         "fyr": YEAR,
         "exe_ymd": EXEC_DATE,
-
         "wa_laf_cd": region_code,
     }
 
-    for attempt in range(
-        1,
-        4
-    ):
+    for attempt in range(1, 4):
 
         try:
 
             print(
-                f"API 접속 "
-                f"{TARGET_REGIONS[region_code]} "
+                f"API {TARGET_REGIONS[region_code]} "
                 f"페이지 {page_index} "
-                f"{attempt}/3"
+                f"시도 {attempt}/3"
             )
 
             response = requests.get(
                 API_URL,
                 params=params,
-                timeout=(60, 60)
+                timeout=(60, 90)
             )
 
             response.raise_for_status()
@@ -572,38 +464,29 @@ def call_api(
 
         except requests.exceptions.RequestException as e:
 
-            print(
-                "API 오류:",
-                e
-            )
+            print("API 오류:", e)
 
             if attempt == 3:
-                raise
+                print("해당 페이지 건너뜀")
+                return None
 
-            time.sleep(10)
+            time.sleep(attempt * 10)
 
     return None
 
 
 # ============================================================
-# API 응답에서 row 추출
+# API 응답 분석
 # ============================================================
 
 def extract_rows(data):
 
-    if not isinstance(
-        data,
-        dict
-    ):
-
+    if not isinstance(data, dict):
         return [], 0
 
-    root = data.get(
-        "QWGJK"
-    )
+    root = data.get("QWGJK")
 
     if not root:
-
         return [], 0
 
     rows = []
@@ -613,21 +496,12 @@ def extract_rows(data):
 
         if "head" in item:
 
-            for head_item in item.get(
-                "head",
-                []
-            ):
+            for head_item in item.get("head", []):
 
-                if not isinstance(
-                    head_item,
-                    dict
-                ):
+                if not isinstance(head_item, dict):
                     continue
 
-                if (
-                    "list_total_count"
-                    in head_item
-                ):
+                if "list_total_count" in head_item:
 
                     total_count = safe_int(
                         head_item.get(
@@ -636,43 +510,77 @@ def extract_rows(data):
                     )
 
         if "row" in item:
+            rows = item.get("row", [])
 
-            rows = item.get(
-                "row",
-                []
-            )
-
-    return (
-        rows,
-        total_count
-    )
+    return rows, total_count
 
 
 # ============================================================
-# 지역별 데이터 조회
+# 지자체명 정리
+# ============================================================
+
+def normalize_local_name(local_name):
+
+    local_name = str(
+        local_name or ""
+    ).strip()
+
+    if local_name.endswith("본청"):
+        local_name = local_name[:-2]
+
+    return local_name
+
+
+# ============================================================
+# 예산 출처
+# ============================================================
+
+def get_budget_source(local_name):
+
+    local_name = normalize_local_name(
+        local_name
+    )
+
+    source_url = BUDGET_SOURCE_PAGES.get(
+        local_name
+    )
+
+    if source_url:
+
+        return {
+            "source_status": "공식 예산서 게시판 확인 가능",
+            "budget_round": "추경 회차 자동확인 전",
+            "source_name": f"{local_name} 공식 예산현황",
+            "source_url": source_url,
+        }
+
+    return {
+        "source_status": "지방재정365 사업정보 확인",
+        "budget_round": "추경 회차 미확인",
+        "source_name": "지방재정365 세부사업별 세출현황",
+        "source_url": "",
+    }
+
+
+# ============================================================
+# 지역별 데이터 수집
 # ============================================================
 
 PAGE_SIZE = 1000
-
 all_rows = []
 
-for (
-    region_code,
-    region_name
-) in TARGET_REGIONS.items():
+
+for region_code, region_name in TARGET_REGIONS.items():
 
     print()
-    print("=" * 70)
-    print(
-        "지역 조회:",
-        region_name
-    )
-    print("=" * 70)
+    print("=" * 75)
+    print("지역 조회:", region_name)
+    print("=" * 75)
 
     first_data = call_api(
         region_code,
-        page_index=1,
-        page_size=PAGE_SIZE
+        1,
+        PAGE_SIZE
     )
 
     rows, total_count = extract_rows(
@@ -686,15 +594,9 @@ for (
         "건"
     )
 
-    all_rows.extend(
-        rows
-    )
+    all_rows.extend(rows)
 
-    if (
-        total_count
-        <= PAGE_SIZE
-    ):
-
+    if total_count <= PAGE_SIZE:
         continue
 
     total_pages = (
@@ -704,7 +606,6 @@ for (
     ) // PAGE_SIZE
 
     print(
-        region_name,
         "전체 페이지:",
         total_pages
     )
@@ -716,9 +617,12 @@ for (
 
         page_data = call_api(
             region_code,
-            page_index=page,
-            page_size=PAGE_SIZE
+            page,
+            PAGE_SIZE
         )
+
+        if page_data is None:
+            continue
 
         page_rows, _ = extract_rows(
             page_data
@@ -730,7 +634,7 @@ for (
 
 
 print()
-print("=" * 70)
+print("=" * 75)
 
 print(
     "4개 지역 전체 수집:",
@@ -738,11 +642,11 @@ print(
     "건"
 )
 
-print("=" * 70)
+print("=" * 75)
 
 
 # ============================================================
-# 도시계획 용역 필터
+# 필터
 # ============================================================
 
 matched = []
@@ -754,55 +658,37 @@ excluded_keyword = 0
 
 for row in all_rows:
 
-    # --------------------------------------------------------
-    # 사업명
-    # --------------------------------------------------------
-
     project_name = str(
-        row.get(
-            "dbiz_nm",
-            ""
-        )
+        row.get("dbiz_nm", "")
     ).strip()
 
     if not project_name:
-
         continue
 
-
     # --------------------------------------------------------
-    # 1. 이미 집행된 사업 제외
+    # 집행액이 있으면 제외
     # --------------------------------------------------------
 
     execution_amount = safe_int(
-        row.get(
-            "ep_amt",
-            0
-        )
+        row.get("ep_amt", 0)
     )
 
     if execution_amount > 0:
-
         excluded_execution += 1
-
         continue
 
-
     # --------------------------------------------------------
-    # 2. 일반 행정성 사업 제외
+    # 일반행정 제외
     # --------------------------------------------------------
 
     if is_excluded_project(
         project_name
     ):
-
         excluded_admin += 1
-
         continue
 
-
     # --------------------------------------------------------
-    # 3. 도시계획 관련성 판별
+    # 도시계획 관련성
     # --------------------------------------------------------
 
     (
@@ -815,14 +701,11 @@ for row in all_rows:
     )
 
     if not is_match:
-
         excluded_keyword += 1
-
         continue
 
-
     # --------------------------------------------------------
-    # 4. 발주 가능성 평가
+    # 발주 가능성 평가
     # --------------------------------------------------------
 
     rating, rating_text = calculate_rating(
@@ -831,12 +714,7 @@ for row in all_rows:
         service_hits
     )
 
-
-    # --------------------------------------------------------
-    # 5. 탐지 키워드 정리
-    # --------------------------------------------------------
-
-    all_hits = sorted(
+    keywords = sorted(
         list(
             set(
                 strong_hits
@@ -846,35 +724,37 @@ for row in all_rows:
         )
     )
 
-
-    # --------------------------------------------------------
-    # 6. 고유 ID
-    # --------------------------------------------------------
-
     project_id = make_project_id(
         row
     )
 
-
     matched.append({
-
         "id": project_id,
-
         "row": row,
-
-        "keywords": all_hits,
-
+        "keywords": keywords,
         "rating": rating,
-
         "rating_text": rating_text,
-
     })
 
 
 print()
-print("집행완료 제외:", excluded_execution, "건")
-print("일반행정 제외:", excluded_admin, "건")
-print("키워드 제외:", excluded_keyword, "건")
+print(
+    "집행액 제외:",
+    excluded_execution,
+    "건"
+)
+
+print(
+    "일반행정 제외:",
+    excluded_admin,
+    "건"
+)
+
+print(
+    "관련성 제외:",
+    excluded_keyword,
+    "건"
+)
 
 print(
     "최종 도시계획 용역 후보:",
@@ -884,7 +764,7 @@ print(
 
 
 # ============================================================
-# 신규 건 텔레그램 전송
+# 신규 Telegram 알림
 # ============================================================
 
 new_count = 0
@@ -893,30 +773,14 @@ new_count = 0
 for item in matched:
 
     project_id = item["id"]
-    row = item["row"]
 
-    keywords = item[
-        "keywords"
-    ]
-
-    rating = item[
-        "rating"
-    ]
-
-    rating_text = item[
-        "rating_text"
-    ]
-
-
-    # 이미 전송한 사업
     if project_id in seen_ids:
-
         continue
 
-
-    # --------------------------------------------------------
-    # 지역
-    # --------------------------------------------------------
+    row = item["row"]
+    keywords = item["keywords"]
+    rating = item["rating"]
+    rating_text = item["rating_text"]
 
     region_code = str(
         row.get(
@@ -933,30 +797,19 @@ for item in matched:
         )
     )
 
-
-    # --------------------------------------------------------
-    # 지자체
-    # --------------------------------------------------------
-
-    local_name = row.get(
+    local_name_raw = row.get(
         "laf_hg_nm",
         "-"
     )
 
-
-    # --------------------------------------------------------
-    # 사업명
-    # --------------------------------------------------------
+    local_name = normalize_local_name(
+        local_name_raw
+    )
 
     project_name = row.get(
         "dbiz_nm",
         "-"
     )
-
-
-    # --------------------------------------------------------
-    # 부서
-    # --------------------------------------------------------
 
     department = (
         row.get("dept_nm")
@@ -964,30 +817,15 @@ for item in matched:
         or "-"
     )
 
-
-    # --------------------------------------------------------
-    # 집행일
-    # --------------------------------------------------------
-
-    exec_date = row.get(
-        "exe_ymd",
-        "-"
-    )
-
-
-    # --------------------------------------------------------
-    # 회계
-    # --------------------------------------------------------
-
     account_name = row.get(
         "acnt_dv_nm",
         "-"
     )
 
-
-    # --------------------------------------------------------
-    # 예산
-    # --------------------------------------------------------
+    exec_date = row.get(
+        "exe_ymd",
+        "-"
+    )
 
     budget_amount = safe_int(
         row.get(
@@ -999,12 +837,6 @@ for item in matched:
         )
     )
 
-
-    # --------------------------------------------------------
-    # 집행액
-    # 이 버전에서는 반드시 0이어야 함
-    # --------------------------------------------------------
-
     execution_amount = safe_int(
         row.get(
             "ep_amt",
@@ -1012,10 +844,9 @@ for item in matched:
         )
     )
 
-
-    # --------------------------------------------------------
-    # 텔레그램 메시지
-    # --------------------------------------------------------
+    source = get_budget_source(
+        local_name
+    )
 
     message = (
         "🚨 [도시계획 신규 용역 후보]\n\n"
@@ -1027,12 +858,11 @@ for item in matched:
         f"🏢 지자체 : {local_name}\n"
         f"🏛 담당부서 : {department}\n\n"
 
-        f"📌 사업명\n"
+        "📌 사업명\n"
         f"{project_name}\n\n"
 
         f"📂 회계구분 : {account_name}\n"
-
-        f"📅 기준일자 : {exec_date}\n"
+        f"📅 지방재정365 기준일 : {exec_date}\n\n"
 
         f"💰 예산관련금액 : "
         f"{format_money(budget_amount)}\n"
@@ -1043,14 +873,36 @@ for item in matched:
         f"🔎 탐지키워드 : "
         f"{', '.join(keywords)}\n\n"
 
-        f"✅ 집행액 0원\n"
-        f"→ 미발주 또는 발주 준비단계 가능성"
+        "━━━━━━━━━━━━━━━━━━\n"
+
+        "📑 예산 출처\n"
+
+        f"{source['source_name']}\n\n"
+
+        f"📌 추경 회차 : "
+        f"{source['budget_round']}\n"
+
+        f"🔍 출처상태 : "
+        f"{source['source_status']}\n"
     )
 
+    if source["source_url"]:
 
-    # --------------------------------------------------------
-    # 텔레그램 발송
-    # --------------------------------------------------------
+        message += (
+            "\n🔗 공식 예산서 확인\n"
+            f"{source['source_url']}\n"
+        )
+
+    message += (
+        "\n━━━━━━━━━━━━━━━━━━\n"
+
+        "✅ 집행액 0원\n"
+
+        "→ 아직 예산 집행 전 사업\n"
+
+        "⚠ 계약 또는 발주 여부는 "
+        "나라장터에서 별도 확인 필요"
+    )
 
     try:
 
@@ -1065,7 +917,7 @@ for item in matched:
         new_count += 1
 
         print(
-            "알림:",
+            "텔레그램 전송:",
             rating,
             region_name,
             local_name,
@@ -1074,11 +926,10 @@ for item in matched:
 
         time.sleep(1)
 
-
     except Exception as e:
 
         print(
-            "텔레그램 실패:",
+            "텔레그램 전송 실패:",
             project_name,
             e
         )
@@ -1093,8 +944,12 @@ save_seen_ids(
 )
 
 
+# ============================================================
+# 종료
+# ============================================================
+
 print()
-print("=" * 70)
+print("=" * 75)
 
 print(
     "신규 텔레그램 전송:",
@@ -1103,11 +958,13 @@ print(
 )
 
 print(
-    "저장된 전체 사업:",
+    "전체 확인 이력:",
     len(seen_ids),
     "건"
 )
 
-print("모니터링 종료")
+print(
+    "모니터링 정상 종료"
+)
 
-print("=" * 70)
+print("=" * 75)
