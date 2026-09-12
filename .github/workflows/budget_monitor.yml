@@ -1,13 +1,20 @@
-name: Budget Monitor Test
+name: Budget Monitor
 
 on:
   workflow_dispatch:
 
+  schedule:
+    - cron: "10 0 * * *"
+
+permissions:
+  contents: write
+
 jobs:
-  test-budget-api:
+  budget-monitor:
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -19,7 +26,25 @@ jobs:
       - name: Install requests
         run: pip install requests
 
-      - name: Test LOFIN365 API
+      - name: Run budget monitor
         env:
           LOFIN_API_KEY: ${{ secrets.LOFIN_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python budget_monitor.py
+
+      - name: Save budget history
+        run: |
+          if [ -f seen_budget_ids.json ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+            git add seen_budget_ids.json
+
+            if ! git diff --cached --quiet; then
+              git commit -m "chore: update budget monitor state"
+              git push
+            else
+              echo "No budget history changes"
+            fi
+          fi
