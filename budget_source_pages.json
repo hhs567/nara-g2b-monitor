@@ -1,0 +1,9 @@
+{
+  "의정부시": {
+    "region": "경기도",
+    "source_name": "의정부시 공식 예산현황",
+    "source_url": "https://www.ui4u.go.kr/portal/bbs/list.do?mId=0107010100&ptIdx=64",
+    "latest_budget_title": "2026년 제2회 추가경정예산서",
+    "latest_budget_date": "2026-05-27"
+  }
+}
