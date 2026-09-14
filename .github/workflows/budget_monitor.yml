@@ -4,7 +4,15 @@ on:
   workflow_dispatch:
 
   schedule:
+    # 매일 09:10 KST
     - cron: "10 0 * * *"
+
+    # 1차 실패 등에 대비한 추가 실행
+    # 매일 09:40 KST
+    - cron: "40 0 * * *"
+
+    # 매일 10:10 KST
+    - cron: "10 1 * * *"
 
 permissions:
   contents: write
@@ -36,25 +44,29 @@ jobs:
         run: |
           python budget_monitor.py
 
-      - name: Save budget history
+      - name: Save budget history and snapshot
+        if: always()
         run: |
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           if [ -f seen_budget_ids.json ]; then
-
             git add seen_budget_ids.json
+          fi
 
-            if ! git diff --cached --quiet; then
+          if [ -f budget_snapshot.json ]; then
+            git add budget_snapshot.json
+          fi
 
-              git commit -m "Update budget monitor history"
-              git push
+          if ! git diff --cached --quiet; then
 
-            else
+            git commit -m "Update budget monitor state"
 
-              echo "No budget history changes"
+            git push
 
-            fi
+          else
+
+            echo "No budget state changes"
 
           fi
