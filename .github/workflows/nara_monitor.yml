@@ -1,24 +1,25 @@
-name: 나라장터 도시계획 수주기회 모니터
+
+name: 나라장터 용역 모니터링
 
 on:
   workflow_dispatch:
-
   schedule:
     - cron: '5 * * * *'
 
 permissions:
   contents: write
 
+concurrency:
+  group: nara-monitor
+  cancel-in-progress: false
+
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
 
     steps:
-      - name: Checkout
+      - name: 저장소 가져오기
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Python 설정
         uses: actions/setup-python@v5
@@ -39,21 +40,16 @@ jobs:
         run: |
           python nara_monitor.py
 
-      - name: 신규 ID 저장
+      - name: 중복 알림 기록 저장
+        if: success()
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -f seen_ids.json ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add seen_ids.json
 
-          git add seen_ids.json
-
-          if git diff --cached --quiet; then
-            echo "저장할 변경사항이 없습니다."
-            exit 0
+            if ! git diff --cached --quiet; then
+              git commit -m "Update monitored notice IDs"
+              git push
+            fi
           fi
-
-          git commit -m "Update seen IDs"
-
-          BRANCH=$(git branch --show-current)
-
-          git pull --rebase origin "$BRANCH"
-          git push origin "$BRANCH"
