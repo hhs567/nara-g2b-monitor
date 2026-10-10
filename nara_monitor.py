@@ -1,471 +1,294 @@
+
 import os
+import re
 import json
 import time
-import re
+import sys
+import requests
+import xml.etree.ElementTree as ET
+
+from pathlib import Path
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+from urllib.parse import unquote
 
-import requests
-
-
-# ============================================================
-# 기본 설정
-# ============================================================
+# ==========================================
+# 1. 기본 설정
+# ==========================================
 
 KST = ZoneInfo("Asia/Seoul")
 
-SERVICE_KEY = os.environ.get("G2B_SERVICE_KEY", "").strip()
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+SERVICE_KEY = os.getenv("G2B_SERVICE_KEY", "").strip()
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
-# GitHub Actions가 늦게 실행되어도 놓치지 않도록 3시간 조회
-LOOKBACK_MINUTES = int(os.environ.get("LOOKBACK_MINUTES", "180"))
+LOOKBACK_MINUTES = int(os.getenv("LOOKBACK_MINUTES", "180"))
+SEEN_FILE = Path("seen_ids.json")
 
-# API 조회
-NUM_OF_ROWS = 100
+TIMEOUT = 35
+RETRIES = 3
+PAGE_SIZE = 100
+MAX_PAGES = 10
+MAX_SEEN = 20000
 
-# 상태 저장 파일
-SEEN_FILE = "seen_ids.json"
+# ==========================================
+# 2. 검색 키워드
+# ==========================================
 
-
-# ============================================================
-# 나라장터 API 주소
-# ============================================================
-
-API_ORDER_PLAN = (
-    "https://apis.data.go.kr/1230000/ao/"
-    "OrderPlanSttusService/getOrderPlanSttusListServc"
-)
-
-API_PRE_SPEC = (
-    "https://apis.data.go.kr/1230000/ao/"
-    "HrcspSsstndrdInfoService/getPublicPrcureThngInfoServc"
-)
-
-API_BID = (
-    "https://apis.data.go.kr/1230000/ad/"
-    "BidPublicInfoService/getBidPblancListInfoServc"
-)
-
-
-# ============================================================
-# 1차 검색 키워드
-# ============================================================
-
-FIRST_KEYWORDS = [
-    "계획",
-    "설계",
-    "정비",
-    "구상",
-    "타당성",
-    "지정",
-    "재생",
-    "조성",
-    "시행",
-    "개발",
-    "검토",
-    "후보지",
-    "전략",
-    "조사",
-    "사업화",
+KEYWORDS = [
+    "계획", "설계", "정비", "구상",
+    "타당성", "지정", "재생", "조성",
+    "시행", "개발", "검토", "후보지",
+    "전략", "조사", "사업화"
 ]
 
+# 도시계획 관련 2차 필터
+FIELD_KEYWORDS = [
+    "도시", "도시계획", "도시개발",
+    "도시기본", "도시관리", "도시재생",
+    "산업", "산업단지", "국가산단",
+    "국가산업단지", "산단",
+    "교통", "도로", "철도", "역세권",
+    "주거", "주택", "공공주택",
+    "택지", "지역개발", "균형발전",
+    "공간", "공간계획", "국토",
+    "토지", "입지", "지구단위",
+    "생활권", "신도시", "정비사업",
+    "재개발", "재건축", "공원",
+    "녹지", "경관", "관광",
+    "지역활성화", "농촌공간",
+    "기본계획", "관리계획"
+]
 
-# ============================================================
-# 2차 분야 필터
-#
-# 1차 키워드가 걸린 뒤 실제 도시계획 관련성 확인
-# ============================================================
+# 명백히 관련성이 낮은 공고를 제외
+EXCLUDE_KEYWORDS = [
+    "전산장비 유지보수",
+    "정보시스템 유지보수",
+    "홈페이지 유지보수",
+    "소방시설 점검",
+    "승강기 유지보수",
+    "복사기 임차",
+    "프린터 임차"
+]
 
-SECOND_CATEGORY_KEYWORDS = {
+# ==========================================
+# 3. 나라장터 API
+# ==========================================
 
-    "도시": [
-        "도시",
-        "도시계획",
-        "도시개발",
-        "도시관리",
-        "도시기본계획",
-        "도시관리계획",
-        "도시재생",
-        "도시정비",
-        "도시공간",
-        "생활권",
-        "생활SOC",
-        "지구단위계획",
-        "개발계획",
-        "개발사업",
-        "정비계획",
-        "정비사업",
-        "재생사업",
-        "기본계획",
-        "관리계획",
-        "공간계획",
-        "공간구조",
-        "토지이용",
-        "토지이용계획",
-        "광역도시",
-        "도시권",
-        "중심지",
-        "역세권",
-        "복합개발",
-        "택지",
-        "산업단지",
-        "국가산업단지",
-        "일반산업단지",
-        "첨단산업단지",
-        "산단",
-        "도시첨단산업단지",
-        "공업지역",
-        "상업지역",
-        "주거지역",
-        "용도지역",
-        "용도지구",
-        "용도구역",
-        "도시계획시설",
-        "공원",
-        "녹지",
-        "광장",
-        "도로",
-        "교통",
-        "광역교통",
-        "주차장",
-        "보행",
-        "생활권계획",
-        "스마트도시",
-        "스마트시티",
-        "콤팩트시티",
-        "압축도시",
-        "거점",
-        "균형발전",
-        "지역개발",
-        "지역발전",
-        "지역활성화",
-        "지역재생",
-        "원도심",
-        "구도심",
-        "신도시",
-        "도시공간혁신",
-        "도시혁신",
-    ],
-
-    "산업": [
-        "산업단지",
-        "산단",
-        "산업혁신",
-        "산업입지",
-        "산업개발",
-        "기업도시",
-        "첨단산업",
-        "미래산업",
-        "신산업",
-        "산업융합",
-        "산업혁신구역",
-        "복합산업",
-    ],
-
-    "교통": [
-        "교통체계",
-        "교통계획",
-        "광역교통",
-        "대중교통",
-        "철도",
-        "역세권",
-        "도로",
-        "도로망",
-        "주차",
-        "보행",
-        "자전거",
-        "환승센터",
-        "환승",
-        "BRT",
-        "트램",
-        "철도역",
-    ],
-
-    "주거": [
-        "주택",
-        "주거",
-        "공공주택",
-        "공공임대",
-        "임대주택",
-        "택지개발",
-        "주거환경",
-        "주거정비",
-        "도시형생활주택",
-        "공동주택",
-        "정비구역",
-        "재개발",
-        "재건축",
-    ],
-
-    "지역개발": [
-        "지역개발",
-        "지역발전",
-        "지역활성화",
-        "지역재생",
-        "균형발전",
-        "생활권",
-        "거점개발",
-        "복합개발",
-        "관광개발",
-        "관광단지",
-        "경제자유구역",
-        "평화경제특구",
-        "특화도시",
-        "특화사업",
-    ],
+API_CONFIG = {
+    "발주계획": {
+        "url": (
+            "https://apis.data.go.kr/1230000/ao/"
+            "OrderPlanSttusService/"
+            "getOrderPlanSttusListServc"
+        ),
+        "date_start": "inqryBgnDt",
+        "date_end": "inqryEndDt"
+    },
+    "사전규격": {
+        "url": (
+            "https://apis.data.go.kr/1230000/ao/"
+            "HrcspSsstndrdInfoService/"
+            "getPublicPrcureThngInfoServc"
+        ),
+        "date_start": "inqryBgnDt",
+        "date_end": "inqryEndDt"
+    },
+    "입찰공고": {
+        "url": (
+            "https://apis.data.go.kr/1230000/ad/"
+            "BidPublicInfoService/"
+            "getBidPblancListInfoServc"
+        ),
+        "date_start": "inqryBgnDt",
+        "date_end": "inqryEndDt"
+    }
 }
 
+# ==========================================
+# 4. 공통 함수
+# ==========================================
 
-# ============================================================
-# HTTP 설정
-# ============================================================
-
-REQUEST_TIMEOUT = 25
-
-session = requests.Session()
-
-session.headers.update({
-    "User-Agent": (
-        "Mozilla/5.0 "
-        "(Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 "
-        "(KHTML, like Gecko) "
-        "Chrome/154.0 Safari/537.36"
-    )
-})
-
-
-# ============================================================
-# 공통 함수
-# ============================================================
-
-def clean_text(value):
-    """HTML/XML/공백 등을 정리"""
-    if value is None:
-        return ""
-
-    value = str(value)
-
-    value = re.sub(r"<[^>]+>", " ", value)
-
-    value = value.replace("&nbsp;", " ")
-    value = value.replace("&amp;", "&")
-    value = value.replace("&lt;", "<")
-    value = value.replace("&gt;", ">")
-
-    value = re.sub(r"\s+", " ", value)
-
-    return value.strip()
-
-
-def get_value(item, *keys):
-    """
-    여러 가능한 API 필드명 중 값이 있는 첫 번째 값을 반환
-    """
-
-    if not isinstance(item, dict):
-        return ""
-
-    # 직접 검색
-    for key in keys:
-        if key in item:
-            value = clean_text(item.get(key))
-            if value:
-                return value
-
-    # 대소문자 무시 검색
-    lower_map = {
-        str(k).lower(): v
-        for k, v in item.items()
-    }
-
-    for key in keys:
-        value = clean_text(lower_map.get(str(key).lower()))
-        if value:
-            return value
-
-    return ""
-
-
-def normalize_title(title):
-    """
-    제목 정리.
-    이전에 'N'처럼 잘못된 값이 제목으로 잡히는 문제 방지.
-    """
-
-    title = clean_text(title)
-
-    # 의미 없는 값
-    if title.upper() in {
-        "",
-        "N",
-        "NULL",
-        "NONE",
-        "N/A",
-        "NA",
-        "-"
-    }:
-        return ""
-
-    return title
+def log(message):
+    print(message, flush=True)
 
 
 def now_kst():
-    """현재 한국시간"""
     return datetime.now(KST)
 
 
-def make_query_window():
-    """
-    ★ 핵심 수정사항
-
-    과거 코드에서 UTC/KST가 섞이면서
-    실제 현재시간보다 약 16시간 이전을 조회하는 문제가 발생할 수 있었음.
-
-    현재는 무조건 Asia/Seoul 기준으로 계산.
-    """
-
-    end = now_kst() + timedelta(minutes=2)
-    start = end - timedelta(minutes=LOOKBACK_MINUTES)
-
-    return start, end
+def clean_text(value):
+    if value is None:
+        return ""
+    return str(value).strip()
 
 
-def format_api_datetime(dt):
-    """
-    나라장터 API용 YYYYMMDDHHMM
-    """
-
-    return dt.strftime("%Y%m%d%H%M")
-
-
-def display_datetime(dt):
-    return dt.strftime("%Y-%m-%d %H:%M")
+def first_value(item, fields):
+    for field in fields:
+        value = clean_text(item.get(field))
+        if value:
+            return value
+    return ""
 
 
-# ============================================================
-# 상태 파일
-# ============================================================
+def normalize_key(value):
+    return re.sub(r"\s+", "", clean_text(value)).lower()
 
-def load_seen_ids():
 
-    if not os.path.exists(SEEN_FILE):
+def is_relevant(title):
+    normalized = normalize_key(title)
+
+    if not normalized:
+        return False
+
+    first_pass = any(
+        normalize_key(k) in normalized
+        for k in KEYWORDS
+    )
+
+    second_pass = any(
+        normalize_key(k) in normalized
+        for k in FIELD_KEYWORDS
+    )
+
+    excluded = any(
+        normalize_key(k) in normalized
+        for k in EXCLUDE_KEYWORDS
+    )
+
+    return first_pass and second_pass and not excluded
+
+
+def load_seen():
+    if not SEEN_FILE.exists():
         return set()
 
     try:
-        with open(
-            SEEN_FILE,
-            "r",
-            encoding="utf-8"
-        ) as f:
-
-            data = json.load(f)
+        data = json.loads(
+            SEEN_FILE.read_text(encoding="utf-8")
+        )
 
         if isinstance(data, list):
             return set(str(x) for x in data)
 
-        return set()
+        if isinstance(data, dict):
+            return set(str(x) for x in data.keys())
 
     except Exception as e:
+        log(f"[기존 ID 읽기 오류] {e}")
 
-        print(f"[경고] seen_ids.json 읽기 실패: {e}")
-
-        return set()
+    return set()
 
 
-def save_seen_ids(seen_ids):
+def save_seen(seen):
+    values = sorted(seen)
 
-    # 너무 커지는 것을 방지
-    recent_ids = list(seen_ids)[-10000:]
+    if len(values) > MAX_SEEN:
+        values = values[-MAX_SEEN:]
 
-    with open(
-        SEEN_FILE,
-        "w",
+    temp_file = SEEN_FILE.with_suffix(".tmp")
+
+    temp_file.write_text(
+        json.dumps(values, ensure_ascii=False, indent=2),
         encoding="utf-8"
-    ) as f:
-
-        json.dump(
-            recent_ids,
-            f,
-            ensure_ascii=False,
-            indent=2
-        )
-
-
-# ============================================================
-# API 호출
-# ============================================================
-
-def call_api(url, params, api_name):
-
-    if not SERVICE_KEY:
-        raise RuntimeError(
-            "G2B_SERVICE_KEY 환경변수가 없습니다."
-        )
-
-    base_params = {
-        "ServiceKey": SERVICE_KEY,
-        "pageNo": 1,
-        "numOfRows": NUM_OF_ROWS,
-        "type": "JSON",
-    }
-
-    base_params.update(params)
-
-    for attempt in range(1, 4):
-
-        try:
-
-            print(
-                f"[API] {api_name} "
-                f"시도 {attempt}/3"
-            )
-
-            response = session.get(
-                url,
-                params=base_params,
-                timeout=REQUEST_TIMEOUT
-            )
-
-            print(
-                f"[API] HTTP {response.status_code}"
-            )
-
-            response.raise_for_status()
-
-            # JSON
-            try:
-                data = response.json()
-
-            except Exception:
-
-                # 혹시 JSON Content-Type 문제가 있는 경우
-                text = response.text
-
-                data = json.loads(text)
-
-            return data
-
-        except Exception as e:
-
-            print(
-                f"[API 오류] {api_name}: {e}"
-            )
-
-            if attempt < 3:
-                time.sleep(3 * attempt)
-
-    print(
-        f"[API 실패] {api_name} "
-        f"3회 모두 실패"
     )
 
-    return {}
+    temp_file.replace(SEEN_FILE)
+
+
+# ==========================================
+# 5. API 응답 해석
+# ==========================================
+
+def xml_to_dict(element):
+    children = list(element)
+
+    if not children:
+        return clean_text(element.text)
+
+    result = {}
+
+    for child in children:
+        tag = child.tag.split("}")[-1]
+        value = xml_to_dict(child)
+
+        if tag in result:
+            if not isinstance(result[tag], list):
+                result[tag] = [result[tag]]
+            result[tag].append(value)
+        else:
+            result[tag] = value
+
+    return result
+
+
+def parse_response(response, category):
+    body = response.content
+
+    if not body or not body.strip():
+        raise ValueError("API 응답 본문이 비어 있습니다.")
+
+    content_type = response.headers.get(
+        "Content-Type", ""
+    ).lower()
+
+    preview = response.text[:350].replace("\n", " ")
+
+    log(f"[API] {category} Content-Type: {content_type}")
+
+    stripped = body.lstrip()
+
+    try:
+        if stripped.startswith(b"{") or stripped.startswith(b"["):
+            return response.json()
+
+        if stripped.startswith(b"<"):
+            root = ET.fromstring(body)
+            return {root.tag.split("}")[-1]: xml_to_dict(root)}
+
+        # 응답 첫 글자만으로 구분되지 않을 때
+        try:
+            return response.json()
+        except ValueError:
+            root = ET.fromstring(body)
+            return {root.tag.split("}")[-1]: xml_to_dict(root)}
+
+    except Exception as e:
+        raise ValueError(
+            f"응답 해석 실패: {e}; "
+            f"본문 앞부분: {preview}"
+        )
+
+
+def find_api_error(data):
+    if not isinstance(data, dict):
+        return ""
+
+    # 공공데이터포털 공통 오류
+    for key in ("OpenAPI_ServiceResponse", "errorResponse"):
+        if key in data:
+            return f"{key}: {str(data[key])[:500]}"
+
+    response = data.get("response", data)
+
+    if not isinstance(response, dict):
+        return ""
+
+    header = response.get("header", {})
+
+    if not isinstance(header, dict):
+        return ""
+
+    code = clean_text(header.get("resultCode"))
+    message = clean_text(header.get("resultMsg"))
+
+    if code and code not in ("00", "0", "000"):
+        return f"API 오류 코드 {code}: {message}"
+
+    return ""
 
 
 def extract_items(data):
-
     if not isinstance(data, dict):
         return []
 
@@ -482,766 +305,439 @@ def extract_items(data):
     items = body.get("items", [])
 
     if isinstance(items, dict):
-        item = items.get("item", [])
-
-        if isinstance(item, list):
-            return item
-
-        if isinstance(item, dict):
-            return [item]
-
-    if isinstance(items, list):
-        return items
+        items = items.get("item", [])
 
     if isinstance(items, dict):
         return [items]
 
+    if isinstance(items, list):
+        return [x for x in items if isinstance(x, dict)]
+
     return []
 
 
-# ============================================================
-# 제목 / 기관 / 금액 / 날짜 / ID 추출
-# ============================================================
+def extract_total(data):
+    response = data.get("response", data)
 
-def get_title(item, api_type):
+    if not isinstance(response, dict):
+        return 0
 
-    if api_type == "pre_spec":
+    body = response.get("body", response)
 
-        title = get_value(
-            item,
-            "specNm",
-            "prdctClsfcNoNm",
-            "prdctClsfcNoNm",
-            "bidNtceNm",
-            "bidNtceDtlNm",
-            "사업명",
-            "품명",
-            "사전규격명",
-            "title",
-            "ntceNm",
-        )
+    if not isinstance(body, dict):
+        return 0
 
-    elif api_type == "order_plan":
+    try:
+        return int(body.get("totalCount", 0))
+    except (TypeError, ValueError):
+        return 0
 
-        title = get_value(
-            item,
-            "bizNm",
-            "orderPlanNm",
-            "orderPlanDtlNm",
-            "prdctClsfcNoNm",
-            "bidNtceNm",
-            "사업명",
-            "용역명",
-            "품명",
-            "title",
-        )
 
-    else:
+# ==========================================
+# 6. API 호출
+# ==========================================
 
-        title = get_value(
-            item,
-            "bidNtceNm",
-            "bidNtceDtlNm",
-            "bizNm",
-            "prdctClsfcNoNm",
-            "사업명",
-            "용역명",
-            "title",
-            "ntceNm",
-        )
+def request_api(category, config, start, end, page):
+    # Decoding 인증키를 기본으로 사용
+    # 환경변수에 인코딩된 키가 있으면 한 번 디코딩
+    key = unquote(SERVICE_KEY)
 
-    title = normalize_title(title)
+    params = {
+        "serviceKey": key,
+        "numOfRows": PAGE_SIZE,
+        "pageNo": page,
+        "type": "json",
+        config["date_start"]: start,
+        config["date_end"]: end
+    }
 
-    # 제목이 없으면 다른 문자열 필드에서 최대한 탐색
-    if not title:
+    last_error = None
 
-        candidates = []
-
-        for key, value in item.items():
-
-            value = normalize_title(value)
-
-            if not value:
-                continue
-
-            # 너무 짧거나 숫자/코드인 값 제외
-            if len(value) < 5:
-                continue
-
-            if re.fullmatch(r"[A-Za-z0-9_-]+", value):
-                continue
-
-            candidates.append(value)
-
-        if candidates:
-            # 가장 긴 자연어 문자열을 제목 후보로 사용
-            title = max(
-                candidates,
-                key=len
+    for attempt in range(1, RETRIES + 1):
+        try:
+            log(
+                f"[API] {category} "
+                f"페이지 {page}, 시도 {attempt}/{RETRIES}"
             )
 
-    return title or "제목 확인 필요"
+            response = requests.get(
+                config["url"],
+                params=params,
+                timeout=TIMEOUT
+            )
 
+            log(f"[API] HTTP {response.status_code}")
 
-def get_agency(item):
+            response.raise_for_status()
 
-    return get_value(
-        item,
-        "dminsttNm",
-        "dmndInsttNm",
-        "orderInsttNm",
-        "ntceInsttNm",
-        "cntrctInsttNm",
-        "institutionNm",
-        "orgNm",
-        "발주기관",
-        "수요기관",
-        "공고기관",
-    ) or "기관 미상"
+            data = parse_response(response, category)
 
+            error = find_api_error(data)
 
-def get_amount(item):
+            if error:
+                raise ValueError(error)
 
-    value = get_value(
-        item,
-        "asignBdgtAmt",
-        "presmptPrce",
-        "bdgtAmt",
-        "orderPlanAmt",
-        "budgetAmt",
-        "totAmt",
-        "배정예산액",
-        "예산액",
-        "추정가격",
+            if not isinstance(data, dict):
+                raise ValueError(
+                    "API 응답의 최상위 구조가 올바르지 않습니다."
+                )
+
+            return data
+
+        except (
+            requests.RequestException,
+            ValueError,
+            ET.ParseError
+        ) as e:
+            last_error = e
+            log(f"[API 오류] {category}: {e}")
+
+            if attempt < RETRIES:
+                time.sleep(attempt * 2)
+
+    raise RuntimeError(
+        f"{category} API {RETRIES}회 실패: {last_error}"
     )
+
+
+def fetch_category(category, config, start, end):
+    all_items = []
+
+    for page in range(1, MAX_PAGES + 1):
+        data = request_api(
+            category, config, start, end, page
+        )
+
+        items = extract_items(data)
+        total = extract_total(data)
+
+        log(
+            f"[{category}] 페이지 {page}: "
+            f"{len(items)}건, 전체 {total}건"
+        )
+
+        all_items.extend(items)
+
+        if not items:
+            break
+
+        if len(items) < PAGE_SIZE:
+            break
+
+        if total > 0 and page * PAGE_SIZE >= total:
+            break
+
+    return all_items
+
+
+# ==========================================
+# 7. 공고 정보 정리
+# ==========================================
+
+TITLE_FIELDS = [
+    "orderPlanNm",
+    "orderPlanName",
+    "bsnsNm",
+    "prdctClsfcNoNm",
+    "prdctNm",
+    "bfSpecNm",
+    "preSpecNm",
+    "bidNtceNm",
+    "bidPblancNm",
+    "ntceNm",
+    "servcNm",
+    "cntrctNm",
+    "prcrmntNm",
+    "pblancNm"
+]
+
+ID_FIELDS = [
+    "orderPlanNo",
+    "orderPlanRegNo",
+    "bfSpecRgstNo",
+    "preSpecRgstNo",
+    "bidNtceNo",
+    "bidPblancNo",
+    "ntceNo",
+    "rgstNo"
+]
+
+ORG_FIELDS = [
+    "ntceInsttNm",
+    "dminsttNm",
+    "orderInsttNm",
+    "insttNm",
+    "dmandInsttNm",
+    "prcrmntInsttNm"
+]
+
+DATE_FIELDS = [
+    "rgstDt",
+    "opengDt",
+    "bidNtceDt",
+    "ntceDt",
+    "orderPlanDt",
+    "bfSpecRgstDt"
+]
+
+AMOUNT_FIELDS = [
+    "asignBdgtAmt",
+    "asignBdgt",
+    "bdgtAmt",
+    "presmptPrce",
+    "presmptPrceAmt",
+    "orderPlanAmt"
+]
+
+URL_FIELDS = [
+    "bidNtceDtlUrl",
+    "bidNtceUrl",
+    "detailUrl",
+    "ntceUrl",
+    "url"
+]
+
+
+def format_amount(value):
+    value = clean_text(value)
 
     if not value:
-        return "미정"
+        return "미표시"
 
-    # 숫자만 있는 경우 천단위 표시
-    numeric = re.sub(
-        r"[^\d]",
-        "",
-        value
-    )
-
-    if numeric:
-
-        try:
-            return f"{int(numeric):,}원"
-        except Exception:
-            pass
-
-    return value
+    try:
+        number = int(float(value.replace(",", "")))
+        return f"{number:,}원"
+    except ValueError:
+        return value
 
 
-def get_date(item, api_type):
+def make_notice(category, item):
+    title = first_value(item, TITLE_FIELDS)
 
-    if api_type == "pre_spec":
-
-        value = get_value(
-            item,
-            "rcptDt",
-            "pubDt",
-            "specRegDt",
-            "regDt",
-            "inqryBgnDt",
-            "등록일시",
-            "공개일시",
-            "사전규격공개일시",
+    if not title:
+        # 실제 응답의 필드명을 확인하기 위한 진단
+        log(
+            f"[제목 필드 없음] {category} "
+            f"필드 목록: {list(item.keys())[:30]}"
         )
-
-    elif api_type == "order_plan":
-
-        value = get_value(
-            item,
-            "orderPlanRegDt",
-            "regDt",
-            "orderPlanYm",
-            "발주계획등록일시",
-        )
-
-    else:
-
-        value = get_value(
-            item,
-            "bidNtceDt",
-            "bidNtceDate",
-            "regDt",
-            "공고일시",
-        )
-
-    return value or "-"
-
-
-def get_id(item, api_type):
-
-    if api_type == "pre_spec":
-
-        return get_value(
-            item,
-            "specRegNo",
-            "specRegNo",
-            "prdctClsfcNo",
-            "bidNtceNo",
-            "사전규격등록번호",
-        )
-
-    elif api_type == "order_plan":
-
-        return get_value(
-            item,
-            "orderPlanNo",
-            "orderPlanRegNo",
-            "발주계획등록번호",
-        )
-
-    else:
-
-        return get_value(
-            item,
-            "bidNtceNo",
-            "bidNtceNo",
-            "입찰공고번호",
-        )
-
-
-def get_link(item, api_type):
-
-    link = get_value(
-        item,
-        "bidNtceDtlUrl",
-        "bidNtceUrl",
-        "ntceDtlUrl",
-        "detailUrl",
-        "url",
-        "link",
-    )
-
-    if link:
-        return link
-
-    # URL이 없을 경우 나라장터 메인
-    return "https://www.g2b.go.kr/"
-
-
-# ============================================================
-# 1차 키워드
-# ============================================================
-
-def find_first_keywords(text):
-
-    text = clean_text(text)
-
-    matched = []
-
-    for keyword in FIRST_KEYWORDS:
-
-        if keyword in text:
-            matched.append(keyword)
-
-    return matched
-
-
-# ============================================================
-# 2차 도시계획 분야
-# ============================================================
-
-def find_second_categories(text):
-
-    text = clean_text(text)
-
-    matched = []
-
-    for category, keywords in SECOND_CATEGORY_KEYWORDS.items():
-
-        for keyword in keywords:
-
-            if keyword in text:
-
-                matched.append(category)
-                break
-
-    return matched
-
-
-# ============================================================
-# 필터링
-# ============================================================
-
-def make_search_text(item, title):
-
-    values = [
-        title,
-        get_agency(item),
-    ]
-
-    for key, value in item.items():
-
-        if value is None:
-            continue
-
-        values.append(
-            clean_text(value)
-        )
-
-    return " ".join(values)
-
-
-def filter_item(item, api_type):
-
-    title = get_title(
-        item,
-        api_type
-    )
-
-    search_text = make_search_text(
-        item,
-        title
-    )
-
-    first_matches = find_first_keywords(
-        search_text
-    )
-
-    if not first_matches:
         return None
 
-    second_matches = find_second_categories(
-        search_text
-    )
+    notice_id = first_value(item, ID_FIELDS)
+    org = first_value(item, ORG_FIELDS)
+    date = first_value(item, DATE_FIELDS)
+    amount = first_value(item, AMOUNT_FIELDS)
+    url = first_value(item, URL_FIELDS)
 
-    if not second_matches:
-        return None
+    # 번호가 없을 경우 제목·기관·날짜로 중복 판별
+    unique_id = (
+        f"{category}|{notice_id}"
+        if notice_id
+        else f"{category}|{title}|{org}|{date}"
+    )
 
     return {
+        "category": category,
+        "id": unique_id,
+        "notice_no": notice_id,
         "title": title,
-        "agency": get_agency(item),
-        "amount": get_amount(item),
-        "date": get_date(item, api_type),
-        "id": get_id(item, api_type),
-        "link": get_link(item, api_type),
-        "first": first_matches,
-        "second": second_matches,
-        "api_type": api_type,
-        "raw": item,
+        "org": org or "미표시",
+        "date": date or "미표시",
+        "amount": format_amount(amount),
+        "url": url
     }
 
 
-# ============================================================
-# Telegram
-# ============================================================
+# ==========================================
+# 8. 텔레그램 알림
+# ==========================================
 
 def send_telegram(message):
-
-    if not TELEGRAM_BOT_TOKEN:
-        print("[Telegram] BOT TOKEN 없음")
-        return False
-
-    if not TELEGRAM_CHAT_ID:
-        print("[Telegram] CHAT ID 없음")
-        return False
+    if not BOT_TOKEN or not CHAT_ID:
+        raise RuntimeError(
+            "텔레그램 환경변수가 설정되지 않았습니다."
+        )
 
     url = (
-        f"https://api.telegram.org/bot"
-        f"{TELEGRAM_BOT_TOKEN}/sendMessage"
+        f"https://api.telegram.org/"
+        f"bot{BOT_TOKEN}/sendMessage"
     )
 
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-        "disable_web_page_preview": True,
-    }
-
-    for attempt in range(1, 4):
-
-        try:
-
-            response = session.post(
-                url,
-                data=payload,
-                timeout=20
-            )
-
-            if response.status_code == 200:
-
-                print("[Telegram] 전송 성공")
-                return True
-
-            print(
-                f"[Telegram 오류] "
-                f"{response.status_code} "
-                f"{response.text[:300]}"
-            )
-
-        except Exception as e:
-
-            print(
-                f"[Telegram 오류] {e}"
-            )
-
-        time.sleep(2)
-
-    return False
-
-
-# ============================================================
-# Telegram 메시지
-# ============================================================
-
-def make_message(result):
-
-    api_type = result["api_type"]
-
-    if api_type == "pre_spec":
-        label = "🟡 B급/나라장터 사전규격"
-
-    elif api_type == "order_plan":
-        label = "🔵 A급/나라장터 발주계획"
-
-    else:
-        label = "🟢 C급/나라장터 입찰공고"
-
-    first = ", ".join(
-        result["first"]
+    response = requests.post(
+        url,
+        data={
+            "chat_id": CHAT_ID,
+            "text": message,
+            "disable_web_page_preview": "true"
+        },
+        timeout=30
     )
 
-    second = ", ".join(
-        result["second"]
-    )
+    response.raise_for_status()
 
+    result = response.json()
+
+    if not result.get("ok"):
+        raise RuntimeError(
+            f"텔레그램 발송 실패: "
+            f"{result.get('description', '알 수 없는 오류')}"
+        )
+
+
+def build_message(notice):
     message = (
-        f"[{label}]\n"
-        f"{result['title']}\n\n"
-        f"발주기관: {result['agency']}\n"
-        f"1차 검색어: {first}\n"
-        f"2차 분야: {second}\n"
-        f"금액: {result['amount']}\n"
-        f"일시: {result['date']}\n"
-        f"번호: {result['id']}\n"
-        f"링크: {result['link']}"
+        "📢 나라장터 신규 용역 공고\n\n"
+        f"📌 구분: {notice['category']}\n"
+        f"📋 용역명: {notice['title']}\n"
+        f"🏢 발주기관: {notice['org']}\n"
+        f"💰 금액: {notice['amount']}\n"
+        f"📅 등록일: {notice['date']}\n"
     )
+
+    if notice["notice_no"]:
+        message += (
+            f"🔎 공고번호: {notice['notice_no']}\n"
+        )
+
+    if notice["url"].startswith(("https://", "http://")):
+        message += f"\n🔗 {notice['url']}"
 
     return message
 
 
-# ============================================================
-# 사전규격 조회
-# ============================================================
-
-def fetch_pre_spec(start, end):
-
-    params = {
-        "inqryDiv": "1",
-        "inqryBgnDt": format_api_datetime(start),
-        "inqryEndDt": format_api_datetime(end),
-    }
-
-    print(
-        "[사전규격 조회]"
-        f" {format_api_datetime(start)}"
-        f" ~ {format_api_datetime(end)}"
-    )
-
-    data = call_api(
-        API_PRE_SPEC,
-        params,
-        "사전규격"
-    )
-
-    items = extract_items(data)
-
-    print(
-        f"[사전규격] {len(items)}건 조회"
-    )
-
-    return items
-
-
-# ============================================================
-# 발주계획 조회
-# ============================================================
-
-def fetch_order_plan(start, end):
-
-    params = {
-        "inqryDiv": "1",
-        "inqryBgnDt": format_api_datetime(start),
-        "inqryEndDt": format_api_datetime(end),
-    }
-
-    print(
-        "[발주계획 조회]"
-        f" {format_api_datetime(start)}"
-        f" ~ {format_api_datetime(end)}"
-    )
-
-    data = call_api(
-        API_ORDER_PLAN,
-        params,
-        "발주계획"
-    )
-
-    items = extract_items(data)
-
-    print(
-        f"[발주계획] {len(items)}건 조회"
-    )
-
-    return items
-
-
-# ============================================================
-# 입찰공고 조회
-# ============================================================
-
-def fetch_bid(start, end):
-
-    params = {
-        "inqryDiv": "1",
-        "inqryBgnDt": format_api_datetime(start),
-        "inqryEndDt": format_api_datetime(end),
-    }
-
-    print(
-        "[입찰공고 조회]"
-        f" {format_api_datetime(start)}"
-        f" ~ {format_api_datetime(end)}"
-    )
-
-    data = call_api(
-        API_BID,
-        params,
-        "입찰공고"
-    )
-
-    items = extract_items(data)
-
-    print(
-        f"[입찰공고] {len(items)}건 조회"
-    )
-
-    return items
-
-
-# ============================================================
-# 메인
-# ============================================================
+# ==========================================
+# 9. 메인 실행
+# ==========================================
 
 def main():
+    log("=" * 65)
+    log("[시작] 나라장터 용역 모니터링")
+    log(f"[현재시간] {now_kst().isoformat()}")
+    log(f"[조회범위] 최근 {LOOKBACK_MINUTES}분")
 
-    print("=" * 70)
-    print("나라장터 도시계획 수주기회 모니터링 시작")
-    print("=" * 70)
+    if not SERVICE_KEY:
+        raise RuntimeError(
+            "G2B_SERVICE_KEY 환경변수가 없습니다."
+        )
 
-    current = now_kst()
+    if not BOT_TOKEN:
+        raise RuntimeError(
+            "TELEGRAM_BOT_TOKEN 환경변수가 없습니다."
+        )
 
-    print(
-        f"[시작] "
-        f"{current.isoformat()}"
+    if not CHAT_ID:
+        raise RuntimeError(
+            "TELEGRAM_CHAT_ID 환경변수가 없습니다."
+        )
+
+    seen = load_seen()
+    log(f"[기존 ID] {len(seen)}건")
+
+    end_dt = now_kst()
+    start_dt = end_dt - timedelta(
+        minutes=LOOKBACK_MINUTES
     )
 
-    start, end = make_query_window()
+    start = start_dt.strftime("%Y%m%d%H%M")
+    end = end_dt.strftime("%Y%m%d%H%M")
 
-    print(
-        f"[조회기간] "
-        f"{display_datetime(start)}"
-        f" ~ "
-        f"{display_datetime(end)}"
-    )
+    log(f"[조회기간] {start} ~ {end}")
 
-    print(
-        f"[조회범위] 최근 "
-        f"{LOOKBACK_MINUTES}분"
-    )
+    all_notices = []
+    failures = []
 
-    # --------------------------------------------------------
-    # 상태
-    # --------------------------------------------------------
+    for category, config in API_CONFIG.items():
+        log("-" * 65)
+        log(f"[{category} 조회] {start} ~ {end}")
 
-    seen_ids = load_seen_ids()
-
-    print(
-        f"[기존 ID] "
-        f"{len(seen_ids)}건"
-    )
-
-    all_results = []
-
-    # --------------------------------------------------------
-    # 1. 발주계획
-    # --------------------------------------------------------
-
-    try:
-
-        items = fetch_order_plan(
-            start,
-            end
-        )
-
-        for item in items:
-
-            result = filter_item(
-                item,
-                "order_plan"
+        try:
+            items = fetch_category(
+                category, config, start, end
             )
 
-            if result:
-                all_results.append(result)
+            log(f"[{category}] 원본 {len(items)}건")
 
-    except Exception as e:
+            matched = 0
 
-        print(
-            f"[발주계획 오류] {e}"
+            for item in items:
+                notice = make_notice(category, item)
+
+                if notice and is_relevant(notice["title"]):
+                    all_notices.append(notice)
+                    matched += 1
+
+            log(f"[{category}] 필터 통과 {matched}건")
+
+        except Exception as e:
+            failures.append(category)
+            log(f"[{category} 조회 실패] {e}")
+
+    log("-" * 65)
+
+    # 세 API 모두 실패하면 성공으로 처리하지 않음
+    if len(failures) == len(API_CONFIG):
+        raise RuntimeError(
+            "발주계획·사전규격·입찰공고 "
+            "API 조회가 모두 실패했습니다."
         )
 
-    # --------------------------------------------------------
-    # 2. 사전규격
-    # --------------------------------------------------------
-
-    try:
-
-        items = fetch_pre_spec(
-            start,
-            end
+    if failures:
+        log(
+            "[주의] 일부 API 조회 실패: "
+            + ", ".join(failures)
         )
 
-        for item in items:
+    log(f"[필터링 완료] {len(all_notices)}건")
 
-            result = filter_item(
-                item,
-                "pre_spec"
-            )
+    sent_count = 0
+    checked_ids = set()
 
-            if result:
-                all_results.append(result)
+    for notice in all_notices:
+        unique_id = notice["id"]
 
-    except Exception as e:
-
-        print(
-            f"[사전규격 오류] {e}"
-        )
-
-    # --------------------------------------------------------
-    # 3. 입찰공고
-    # --------------------------------------------------------
-
-    try:
-
-        items = fetch_bid(
-            start,
-            end
-        )
-
-        for item in items:
-
-            result = filter_item(
-                item,
-                "bid"
-            )
-
-            if result:
-                all_results.append(result)
-
-    except Exception as e:
-
-        print(
-            f"[입찰공고 오류] {e}"
-        )
-
-    print(
-        f"[필터링 완료] "
-        f"{len(all_results)}건"
-    )
-
-    # --------------------------------------------------------
-    # 중복 제거
-    # --------------------------------------------------------
-
-    new_count = 0
-
-    for result in all_results:
-
-        item_id = result["id"]
-
-        if not item_id:
-
-            # ID가 없으면 제목+기관으로 임시 ID 생성
-            item_id = (
-                f"{result['api_type']}|"
-                f"{result['title']}|"
-                f"{result['agency']}"
-            )
-
-            result["id"] = item_id
-
-        if item_id in seen_ids:
-
-            print(
-                f"[중복 제외] "
-                f"{result['title']}"
-            )
-
+        if unique_id in seen:
             continue
 
-        # ----------------------------------------------------
-        # Telegram
-        # ----------------------------------------------------
+        if unique_id in checked_ids:
+            continue
 
-        message = make_message(
-            result
-        )
+        checked_ids.add(unique_id)
 
-        print(
-            "\n"
-            + "-" * 70
-            + "\n"
-            + message
-            + "\n"
-            + "-" * 70
-        )
+        message = build_message(notice)
 
-        success = send_telegram(
-            message
-        )
+        try:
+            send_telegram(message)
+            seen.add(unique_id)
+            sent_count += 1
 
-        if success:
+            # 중간에 오류가 발생해도 발송된 ID 보존
+            save_seen(seen)
 
-            seen_ids.add(
-                item_id
+            log(
+                f"[알림 성공] "
+                f"{notice['category']} / "
+                f"{notice['title']}"
             )
 
-            new_count += 1
+            time.sleep(0.5)
 
-            # 너무 빠른 연속 전송 방지
-            time.sleep(1)
+        except Exception as e:
+            log(
+                f"[텔레그램 오류] "
+                f"{notice['title']}: {e}"
+            )
+            raise
 
-    # --------------------------------------------------------
-    # 상태 저장
-    # --------------------------------------------------------
+    save_seen(seen)
 
-    save_seen_ids(
-        seen_ids
-    )
+    log("=" * 65)
+    log(f"[완료] 신규 알림 {sent_count}건")
+    log(f"[최종 ID] {len(seen)}건")
+    log("=" * 65)
 
-    print("=" * 70)
-
-    print(
-        f"[완료] 신규 알림 "
-        f"{new_count}건"
-    )
-
-    print(
-        f"[최종 ID] "
-        f"{len(seen_ids)}건"
-    )
-
-    print("=" * 70)
-
-
-# ============================================================
-# 실행
-# ============================================================
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        log(f"[치명적 오류] {e}")
+        sys.exit(1)
