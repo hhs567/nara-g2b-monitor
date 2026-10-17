@@ -1,191 +1,96 @@
-        encoding="utf-8"
-    )
 
-    temp_file.replace(SEEN_FILE)
+import os
+import re
+import json
+import time
+import sys
+import hashlib
+import requests
+import xml.etree.ElementTree as ET
 
-
-# ==========================================
-# 5. API 응답 해석
-# ==========================================
-
-def xml_to_dict(element):
-    children = list(element)
-
-    if not children:
-        return clean_text(element.text)
-
-    result = {}
-
-    for child in children:
-        tag = child.tag.split("}")[-1]
-        value = xml_to_dict(child)
-
-        if tag in result:
-            if not isinstance(result[tag], list):
-                result[tag] = [result[tag]]
-            result[tag].append(value)
-        else:
-            result[tag] = value
-
-    return result
-
-
-def parse_response(response, category):
-    body = response.content
-
-    if not body or not body.strip():
-        raise ValueError("API 응답 본문이 비어 있습니다.")
-
-    content_type = response.headers.get(
-        "Content-Type", ""
-    ).lower()
-
-    preview = response.text[:350].replace("\n", " ")
-
-    log(f"[API] {category} Content-Type: {content_type}")
-
-    stripped = body.lstrip()
-
-    try:
-        if stripped.startswith(b"{") or stripped.startswith(b"["):
-            return response.json()
-
-        if stripped.startswith(b"<"):
-            root = ET.fromstring(body)
-            return {root.tag.split("}")[-1]: xml_to_dict(root)}
-
-        # 응답 첫 글자만으로 구분되지 않을 때
-        try:
-            return response.json()
-        except ValueError:
-            root = ET.fromstring(body)
-            return {root.tag.split("}")[-1]: xml_to_dict(root)}
-
-    except Exception as e:
-        raise ValueError(
-            f"응답 해석 실패: {e}; "
-            f"본문 앞부분: {preview}"
-        )
-
-
-def find_api_error(data):
-    if not isinstance(data, dict):
-        return ""
-
-    # 공공데이터포털 공통 오류
-    for key in ("OpenAPI_ServiceResponse", "errorResponse"):
-        if key in data:
-            return f"{key}: {str(data[key])[:500]}"
-
-    response = data.get("response", data)
-
-    if not isinstance(response, dict):
-        return ""
-
-    header = response.get("header", {})
-
-    if not isinstance(header, dict):
-        return ""
-
-    code = clean_text(header.get("resultCode"))
-    message = clean_text(header.get("resultMsg"))
-
-    if code and code not in ("00", "0", "000"):
-        return f"API 오류 코드 {code}: {message}"
-
-    return ""
-
-
-def extract_items(data):
-    if not isinstance(data, dict):
-        return []
-
-    response = data.get("response", data)
-
-    if not isinstance(response, dict):
-        return []
-
-    body = response.get("body", response)
-
-    if not isinstance(body, dict):
-        return []
-
-    items = body.get("items", [])
-
-    if isinstance(items, dict):
-        items = items.get("item", [])
-
-    if isinstance(items, dict):
-        return [items]
-
-    if isinstance(items, list):
-        return [x for x in items if isinstance(x, dict)]
-
-    return []
-
-
-def extract_total(data):
-    response = data.get("response", data)
-
-    if not isinstance(response, dict):
-        return 0
-
-    body = response.get("body", response)
-
-    if not isinstance(body, dict):
-        return 0
-
-    try:
-        return int(body.get("totalCount", 0))
-    except (TypeError, ValueError):
-        return 0
-
+from pathlib import Path
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+from urllib.parse import unquote
 
 # ==========================================
-# 6. API 호출
+# 1. 기본 설정
 # ==========================================
 
-def request_api(category, config, start, end, page):
-    # Decoding 인증키를 기본으로 사용
-    # 환경변수에 인코딩된 키가 있으면 한 번 디코딩
-    key = unquote(SERVICE_KEY)
+KST = ZoneInfo("Asia/Seoul")
 
-    params = {
-        "serviceKey": key,
-        "numOfRows": PAGE_SIZE,
-        "pageNo": page,
-        "type": "json",
-        config["date_start"]: start,
-        config["date_end"]: end
-    }
+SERVICE_KEY = os.getenv("G2B_SERVICE_KEY", "").strip()
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
-    last_error = None
+LOOKBACK_MINUTES = int(os.getenv("LOOKBACK_MINUTES", "180"))
+SEEN_FILE = Path("seen_ids.json")
 
-    for attempt in range(1, RETRIES + 1):
-        try:
-            log(
-                f"[API] {category} "
-                f"페이지 {page}, 시도 {attempt}/{RETRIES}"
-            )
+TIMEOUT = 35
+RETRIES = 3
+PAGE_SIZE = 100
+MAX_PAGES = 10
+MAX_SEEN = 20000
 
-            response = requests.get(
-                config["url"],
-                params=params,
-                timeout=TIMEOUT
-            )
+# ==========================================
+# 2. 검색 키워드
+# ==========================================
 
-            log(f"[API] HTTP {response.status_code}")
+KEYWORDS = [
+    "계획", "설계", "정비", "구상",
+    "타당성", "지정", "재생", "조성",
+    "시행", "개발", "검토", "후보지",
+    "전략", "조사", "사업화"
+]
 
-            response.raise_for_status()
+# 도시계획 관련 2차 필터
+FIELD_KEYWORDS = [
+    "도시", "도시계획", "도시개발",
+    "도시기본", "도시관리", "도시재생",
+    "산업", "산업단지", "국가산단",
+    "국가산업단지", "산단",
+    "교통", "도로", "철도", "역세권",
+    "주거", "주택", "공공주택",
+    "택지", "지역개발", "균형발전",
+    "공간", "공간계획", "국토",
+    "토지", "입지", "지구단위",
+    "생활권", "신도시", "정비사업",
+    "재개발", "재건축", "공원",
+    "녹지", "경관", "관광",
+    "지역활성화", "농촌공간",
+    "기본계획", "관리계획"
+]
 
-            data = parse_response(response, category)
+# 명백히 관련성이 낮은 공고를 제외
+EXCLUDE_KEYWORDS = [
+    "전산장비 유지보수",
+    "정보시스템 유지보수",
+    "홈페이지 유지보수",
+    "소방시설 점검",
+    "승강기 유지보수",
+    "복사기 임차",
+    "프린터 임차"
+]
 
-            error = find_api_error(data)
+# ==========================================
+# 3. 나라장터 API
+# ==========================================
 
-            if error:
-                raise ValueError(error)
-
-            if not isinstance(data, dict):
-                raise ValueError(
-                    "API 응답의 최상위 구조가 올바르지 않습니다."
-                )
+API_CONFIG = {
+    "발주계획": {
+        "url": (
+            "https://apis.data.go.kr/1230000/ao/"
+            "OrderPlanSttusService/"
+            "getOrderPlanSttusListServc"
+        ),
+        "date_start": "inqryBgnDt",
+        "date_end": "inqryEndDt"
+    },
+    "사전규격": {
+        "url": os.getenv("G2B_PRESPEC_URL",
+            "https://apis.data.go.kr/1230000/ao/"
+            "HrcspSsstndrdInfoService/"
+            "getPublicPrcureThngInfoServcPPSSrch"
+        ),
+        "date_start": "inqryBgnDt",
+        "date_end": "inqryEndDt"
